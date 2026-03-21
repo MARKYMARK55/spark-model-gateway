@@ -1,4 +1,4 @@
-# claude-local-stack
+# Claude Code Local Stack
 
 Route any Anthropic-SDK application — **Open WebUI, Langflow, n8n, your own code** — to a local model server by mapping `claude-*` model names through a [LiteLLM](https://github.com/BerriAI/litellm) proxy.
 

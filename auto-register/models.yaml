@@ -1,0 +1,235 @@
+# auto-register/models.yaml
+# ==========================
+# Model definitions for sparkrun_sync.py.
+#
+# When sparkrun_sync.py detects a model on a vLLM/SGLang endpoint it looks up
+# the served model name here and registers the appropriate LiteLLM presets and
+# claude-* aliases in the LiteLLM database — no proxy restart needed.
+#
+# ── How it works ─────────────────────────────────────────────────────────────
+#
+#   1. sparkrun_sync.py polls GET /v1/models on each endpoint in `endpoints:`
+#   2. When a model appears or changes it looks up the model name here
+#      (exact match first, then substring match)
+#   3. It POSTs to LiteLLM /model/new for each preset defined below
+#   4. When the model disappears it calls /model/delete to clean up
+#
+# ── Thinking styles ──────────────────────────────────────────────────────────
+#
+#   thinking_budget  Qwen3/3.5 — top-level param passed to vLLM
+#   nemotron         Nemotron  — via extra_body.chat_template_kwargs
+#   effort           GPT-OSS   — maps budget values to low/medium/high/max
+#   none             Small models / GLM — thinking values ignored
+#
+# ── Adding a new model ───────────────────────────────────────────────────────
+#
+#   Find the exact model name vLLM is serving:
+#     curl http://localhost:8000/v1/models | python3 -m json.tool
+#
+#   Add an entry under `models:` using that name as the key.
+#   Set short_name, thinking_style, and optionally claude_code_alias.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Defaults applied to all models unless overridden per-model
+# ─────────────────────────────────────────────────────────────────────────────
+defaults:
+  api_base: "http://host.docker.internal:8000/v1"
+  api_key: "EMPTY"
+  thinking_style: "thinking_budget"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Standard presets — "thinking" values are translated per thinking_style
+# ─────────────────────────────────────────────────────────────────────────────
+presets:
+  Fast:
+    temperature: 0.55
+    top_p: 0.98
+    max_tokens: 32768
+    timeout: 120
+    stream_timeout: 120
+    # no thinking — fastest responses
+
+  Expert:
+    temperature: 0.55
+    top_p: 0.98
+    max_tokens: 32768
+    timeout: 400
+    stream_timeout: 400
+    thinking: 4096
+
+  Heavy:
+    temperature: 0.55
+    top_p: 0.98
+    max_tokens: 32768
+    timeout: 600
+    stream_timeout: 600
+    thinking: 16384
+
+  Max:
+    temperature: 0.55
+    top_p: 0.98
+    max_tokens: 32768
+    timeout: 600
+    stream_timeout: 600
+    thinking: 32768
+
+  Code:
+    temperature: 0.10
+    top_p: 0.95
+    max_tokens: 16384
+    timeout: 300
+    stream_timeout: 300
+    thinking: 4096
+
+  Creative:
+    temperature: 0.85
+    top_p: 0.98
+    max_tokens: 32768
+    timeout: 400
+    stream_timeout: 400
+    thinking: 2048
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model definitions
+# Keys match the model name returned by GET /v1/models (substring match ok)
+# ─────────────────────────────────────────────────────────────────────────────
+models:
+
+  # ── Qwen3 / Qwen3.5 family (thinking_budget style) ──────────────────────
+
+  "Qwen/Qwen3-30B-A3B":
+    short_name: "Qwen3-30B"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "Qwen/Qwen3-30B-A3B-FP8":
+    short_name: "Qwen3-30B"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "Qwen/Qwen3.5-35B-A3B":
+    short_name: "Qwen3.5-35B"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "Qwen/Qwen3.5-35B-A3B-FP8":
+    short_name: "Qwen3.5-35B"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "Qwen/Qwen3.5-27B-FP8":
+    short_name: "Qwen3.5-27B"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "Qwen/Qwen3.5-122B-A10B-FP8":
+    short_name: "Qwen3.5-122B"
+    claude_code_alias: "claude-opus-4-5"
+
+  "Qwen/Qwen3.5-397B-A17B-FP8":
+    short_name: "Qwen3.5-397B"
+    claude_code_alias: "claude-opus-4-5"
+
+  # Coder variant — lower default temperature
+  "Qwen/Qwen3-Coder-Next-FP8":
+    short_name: "Qwen3-Coder"
+    presets: [Fast, Expert, Heavy, Max, Code]
+    override:
+      temperature: 0.20
+    claude_code_alias: "claude-sonnet-4-5"
+
+  # Small models — no thinking, limited presets
+  "Qwen/Qwen3.5-9B":
+    short_name: "Qwen3.5-9B"
+    presets: [Fast, Expert, Code]
+
+  "Qwen/Qwen3.5-4B":
+    short_name: "Qwen3.5-4B"
+    presets: [Fast, Code]
+    thinking_style: "none"
+
+  "Qwen/Qwen3.5-2B":
+    short_name: "Qwen3.5-2B"
+    presets: [Fast, Code]
+    thinking_style: "none"
+
+  "Qwen/Qwen3-1.7B":
+    short_name: "Qwen3-1.7B"
+    presets: [Fast]
+    thinking_style: "none"
+
+  # ── Llama family ─────────────────────────────────────────────────────────
+
+  "meta-llama/Llama-3.3-70B-Instruct":
+    short_name: "Llama-3.3-70B"
+    thinking_style: "none"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "meta-llama/Llama-3.1-70B-Instruct":
+    short_name: "Llama-3.1-70B"
+    thinking_style: "none"
+
+  "meta-llama/Llama-3.1-8B-Instruct":
+    short_name: "Llama-3.1-8B"
+    presets: [Fast, Code]
+    thinking_style: "none"
+
+  # ── Mistral family ───────────────────────────────────────────────────────
+
+  "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+    short_name: "Mistral-Small"
+    thinking_style: "none"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  "mistralai/Mistral-Nemo-Instruct-2407":
+    short_name: "Mistral-Nemo"
+    presets: [Fast, Code]
+    thinking_style: "none"
+
+  # ── DeepSeek family ──────────────────────────────────────────────────────
+
+  "deepseek-ai/DeepSeek-R1":
+    short_name: "DeepSeek-R1"
+    thinking_style: "thinking_budget"
+    claude_code_alias: "claude-opus-4-5"
+
+  "deepseek-ai/DeepSeek-V3":
+    short_name: "DeepSeek-V3"
+    thinking_style: "none"
+    claude_code_alias: "claude-sonnet-4-5"
+
+  # ── Generic fallback entries — add your own below ────────────────────────
+  # Copy any block and set the key to the exact model name from /v1/models.
+
+  # "your-org/your-model-name":
+  #   short_name: "MyModel"
+  #   thinking_style: "none"          # or thinking_budget / nemotron / effort
+  #   claude_code_alias: "claude-sonnet-4-5"  # optional
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Utility models — single registration, no presets (judges, routers, embedders)
+# ─────────────────────────────────────────────────────────────────────────────
+utility_models:
+
+  phi-mini:
+    model_patterns:
+      - "phi-4-mini"
+      - "phi-3.5-mini"
+      - "microsoft/Phi"
+    register_as: "Phi-Mini"
+    aliases: []
+    description: "Phi-4-Mini — small judge/router model"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoints to poll
+# ─────────────────────────────────────────────────────────────────────────────
+endpoints:
+  primary:
+    port: 8000          # main SparkRun / vLLM port
+    role: "primary"
+    presets: "all"      # register all presets defined above
+
+  secondary:
+    port: 8001          # optional second GPU / TP group
+    role: "secondary"
+    presets: [Fast, Expert, Code]
+
+  utility:
+    port: 8010          # small always-on utility model (Phi-Mini etc.)
+    role: "utility"
+    presets: null

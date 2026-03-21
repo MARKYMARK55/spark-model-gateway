@@ -1,0 +1,60 @@
+# auto-register/docker-compose.db.yml
+# =====================================
+# LiteLLM with PostgreSQL database — enables runtime model registration.
+#
+# Use this instead of the root docker-compose.yml when you want sparkrun_sync.py
+# to auto-register models without restarting the proxy.
+#
+# Start:  docker compose -f auto-register/docker-compose.db.yml up -d
+# Sync:   python auto-register/sparkrun_sync.py --watch
+# Stop:   docker compose -f auto-register/docker-compose.db.yml down
+
+services:
+
+  litellm-db:
+    image: postgres:16-alpine
+    container_name: litellm-db
+    restart: unless-stopped
+    volumes:
+      - litellm_db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm_pass
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm-claude-local
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ../litellm_claude_local.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: "simple-api-key"
+      # DB enables /model/new and /model/delete endpoints used by sparkrun_sync.py
+      DATABASE_URL: "postgresql://litellm:litellm_pass@litellm-db:5432/litellm"
+      STORE_MODEL_IN_DB: "true"
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    healthcheck:
+      test: >
+        python3 -c "import urllib.request as u; u.urlopen(u.Request(
+          'http://localhost:4000/health/readiness',
+          headers={'Authorization':'Bearer simple-api-key'}))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  litellm_db:

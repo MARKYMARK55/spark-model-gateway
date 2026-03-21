@@ -1,4 +1,4 @@
-# Claude Code Local Stack
+# SparkRun Auto Model Registration with LiteLLM & Local Claude Code Setup
 
 Route any Anthropic-SDK application — **Open WebUI, Langflow, n8n, your own code** — to a local model server by mapping `claude-*` model names through a [LiteLLM](https://github.com/BerriAI/litellm) proxy.
 
@@ -11,6 +11,7 @@ Your local model (vLLM, Ollama, LM Studio, llama.cpp, NVIDIA NIM, **[SparkRun](h
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
 - [Using with SparkRun](#using-with-sparkrun)
+- [Auto-registration — sparkrun_sync.py](#auto-registration--sparkrun_syncpy)
 - [Configuration](#configuration)
 - [Model routing & temperature guide](#model-routing--temperature-guide)
 - [⚠️ The Claude Code CLI conflict](#️-the-claude-code-cli-conflict)
@@ -69,8 +70,8 @@ LiteLLM acts as a **translation layer**. It receives requests in Anthropic forma
 **1. Clone and configure**
 
 ```bash
-git clone https://github.com/MARKYMARK55/claude-local-stack.git
-cd claude-local-stack
+git clone https://github.com/MARKYMARK55/sparkrun-litellm-local.git
+cd sparkrun-litellm-local
 ```
 
 Edit `litellm_claude_local.yaml` — find every `your-model-name` and `your-api-key` and replace them:
@@ -208,6 +209,167 @@ curl http://localhost:4000/v1/messages \
     "max_tokens": 64,
     "messages": [{"role": "user", "content": "Reply with only: LOCAL MODEL WORKING"}]
   }'
+```
+
+---
+
+## Auto-registration — sparkrun_sync.py
+
+The static `litellm_claude_local.yaml` config requires a proxy restart every time SparkRun loads a different model. The `auto-register/` directory contains a **dynamic sync daemon** that watches vLLM endpoints and registers/deregisters models in the LiteLLM database in real time — no restart, no manual config edits.
+
+```mermaid
+flowchart LR
+    subgraph SR["SparkRun"]
+        R["sparkrun run qwen3-30b-vllm"]
+        V["vLLM :8000/v1"]
+        R -->|loads model| V
+    end
+
+    subgraph Sync["sparkrun_sync.py\n(runs on host)"]
+        P["Poll GET /v1/models\nevery 30s"]
+        L["Look up model\nin models.yaml"]
+        A["POST /model/new\nfor each preset"]
+        D["POST /model/delete\nwhen model goes away"]
+        P --> L --> A
+        P --> D
+    end
+
+    subgraph LM["LiteLLM :4000\n(DB mode)"]
+        DB[("PostgreSQL\ndynamic model store")]
+        API["Proxy API"]
+        DB <--> API
+    end
+
+    subgraph Apps["Apps"]
+        OW["Open WebUI"]
+        CC["Claude Code CLI"]
+    end
+
+    V -->|"model appears"| P
+    A -->|"register"| DB
+    D -->|"deregister"| DB
+    API --> Apps
+```
+
+### Two modes
+
+| Mode | Config | Restart on model change? | When to use |
+|---|---|---|---|
+| **Static** | `litellm_claude_local.yaml` | Yes | Fixed model, simple setup |
+| **DB / dynamic** | `auto-register/docker-compose.db.yml` + `sparkrun_sync.py` | No | SparkRun swapping models, multi-GPU |
+
+### Thinking style translation
+
+Different model families expose extended thinking via different API parameters. `sparkrun_sync.py` translates a single `thinking: N` value in `models.yaml` to the correct format per family:
+
+| `thinking_style` | Models | What gets sent to vLLM |
+|---|---|---|
+| `thinking_budget` | Qwen3, Qwen3.5, MiniMax, DeepSeek-R1 | `thinking_budget: N` (top-level param) |
+| `nemotron` | NVIDIA Nemotron | `extra_body.chat_template_kwargs.enable_thinking: true, thinking_budget: N` |
+| `effort` | GPT-OSS | `extra_body.chat_template_kwargs.effort: "medium"\|"high"\|"max"` |
+| `none` | GLM, small Qwen, Llama | No thinking params added |
+
+### Setup
+
+**1. Start LiteLLM with database**
+
+```bash
+docker compose -f auto-register/docker-compose.db.yml up -d
+```
+
+This starts a Postgres container alongside LiteLLM. The `STORE_MODEL_IN_DB=true` environment variable enables the `/model/new` and `/model/delete` API endpoints that the sync script uses.
+
+**2. Configure your models**
+
+Edit `auto-register/models.yaml`. The most important fields per model entry:
+
+```yaml
+"Qwen/Qwen3-30B-A3B":          # exact string from GET /v1/models
+  short_name: "Qwen3-30B"       # prefix for preset names: Qwen3-30B-Fast, etc.
+  thinking_style: "thinking_budget"
+  claude_code_alias: "claude-sonnet-4-5"   # optional — registers this alias too
+```
+
+**3. Run the sync daemon**
+
+```bash
+# Install dependencies
+pip install requests pyyaml
+
+# Single pass (useful for testing)
+python auto-register/sparkrun_sync.py --once
+
+# Watch mode — polls every 30 seconds
+python auto-register/sparkrun_sync.py --watch
+
+# Custom interval
+python auto-register/sparkrun_sync.py --watch --interval 15
+```
+
+**4. Load a model with SparkRun**
+
+```bash
+sparkrun run qwen3-30b-vllm
+```
+
+Within one poll cycle the sync script detects the model on port 8000, looks it up in `models.yaml`, and registers all presets. You'll see output like:
+
+```
+10:42:01 [INFO] Port 8000: detected Qwen/Qwen3-30B-A3B
+10:42:01 [INFO]   Config match: Qwen3-30B
+10:42:01 [INFO]   + Qwen3-30B-Fast                    id: 3a7f1c...
+10:42:01 [INFO]   + Qwen3-30B-Expert                  id: 9b2e4d...
+10:42:01 [INFO]   + Qwen3-30B-Heavy                   id: 5c8a0f...
+10:42:01 [INFO]   + Qwen3-30B-Max                     id: 1d6b3e...
+10:42:01 [INFO]   + Qwen3-30B-Code                    id: 7f4c2a...
+10:42:01 [INFO]   + Qwen3-30B-Creative                id: 2e9d5b...
+10:42:01 [INFO]   + claude-sonnet-4-5                 id: 8a1f7c...
+10:42:01 [INFO]   + local-coder                       id: 4b6e3d...
+```
+
+**5. Switch models — zero downtime**
+
+```bash
+sparkrun stop qwen3-30b-vllm
+sparkrun run qwen3-coder-next-vllm
+```
+
+The sync script detects the change, deregisters all Qwen3-30B presets, and registers the new Qwen3-Coder presets — all within the next poll cycle.
+
+### CLI reference
+
+```bash
+python sparkrun_sync.py --once               # single pass
+python sparkrun_sync.py --watch              # continuous (default 30s)
+python sparkrun_sync.py --watch --interval 15
+python sparkrun_sync.py --deregister-all     # clean slate — remove everything
+python sparkrun_sync.py --once --port 8001   # target one endpoint only
+python sparkrun_sync.py --litellm-url http://192.168.1.10:4000
+python sparkrun_sync.py -v                   # verbose / debug logging
+```
+
+### Run as a systemd service
+
+To keep the sync running across reboots, install it as a user service:
+
+```ini
+# ~/.config/systemd/user/sparkrun-sync.service
+[Unit]
+Description=SparkRun → LiteLLM model sync
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /path/to/claude-local-stack/auto-register/sparkrun_sync.py --watch --interval 30
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now sparkrun-sync
+journalctl --user -fu sparkrun-sync
 ```
 
 ---

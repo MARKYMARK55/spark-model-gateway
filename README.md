@@ -493,6 +493,8 @@ claude          # → Anthropic cloud
 claude-local    # → DGX Spark vLLM via LiteLLM
 ```
 
+![Claude Code session routed to local DGX Spark model](assets/Claude%20Code.png)
+
 ---
 
 ## LiteLLM UI

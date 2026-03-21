@@ -423,6 +423,13 @@ claude-local    # → DGX Spark vLLM via LiteLLM
 
 ## LiteLLM UI
 
+When you're running local models the question is always: *is anything actually happening?* The LiteLLM UI gives you a live window into the proxy — you can see every request that hit it, which model was called, how many tokens were used, and how long it took. This is particularly useful with the DGX Spark setup because:
+
+- **SparkRun swaps models frequently** — the Models tab shows you exactly which presets are currently registered so you know what's live without querying the API
+- **Local models are slower** — the Logs tab shows per-request latency so you can see where time is being spent (network vs inference vs cold start)
+- **Multiple apps share the proxy** — Open WebUI, Claude Code CLI, Langflow, and your own scripts all go through the same port 4000. The Logs tab shows all of them in one place, labelled by API key if you assign different keys per app
+- **Debugging `drop_params` issues** — if vLLM rejects a request because of an Anthropic-specific parameter, the error shows up immediately in Logs rather than silently failing in the application
+
 LiteLLM ships with a built-in web dashboard. Open it at:
 
 ```

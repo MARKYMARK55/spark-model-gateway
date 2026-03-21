@@ -1,0 +1,133 @@
+# litellm_claude_local.yaml
+# ==========================
+# LiteLLM proxy config — routes Claude model names to a local vLLM endpoint.
+#
+# Drop-in for any OpenAI-compatible local model server (vLLM, Ollama, LM Studio,
+# llama.cpp server, NVIDIA NIM, etc.).
+#
+# Usage:
+#   docker compose up -d
+#   # then use Open WebUI, Langflow, or any Anthropic-SDK app pointed at port 4000
+
+general_settings:
+  master_key: "simple-api-key"
+  allow_requests_on_db_unavailable: true
+  background_health_checks: false
+
+litellm_settings:
+  drop_params: true     # silently drops unsupported Anthropic params (betas, cache_control, etc.)
+  set_verbose: false
+
+model_list:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # OPUS aliases — deep reasoning, long-horizon tasks
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - model_name: "claude-opus-4-5"
+    litellm_params:
+      model: openai/your-model-name          # ← change to your vLLM model ID
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 32768
+      timeout: 600
+
+  - model_name: "claude-opus-4-0"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 32768
+      timeout: 600
+
+  - model_name: "claude-3-7-sonnet-20250219"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 32768
+      timeout: 600
+
+  - model_name: "claude-3-opus-20240229"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 32768
+      timeout: 600
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SONNET aliases — code generation, balanced reasoning
+  # Low temperature (0.10) for deterministic, reproducible code output
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - model_name: "claude-sonnet-4-5"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.10
+      max_tokens: 16384
+      timeout: 300
+
+  - model_name: "claude-sonnet-4-0"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.10
+      max_tokens: 16384
+      timeout: 300
+
+  - model_name: "claude-3-5-sonnet-20241022"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.10
+      max_tokens: 16384
+      timeout: 300
+
+  - model_name: "claude-3-5-sonnet-20240620"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.10
+      max_tokens: 16384
+      timeout: 300
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # HAIKU aliases — fast responses, summarisation, cheap sub-tasks
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - model_name: "claude-haiku-3-5"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 16384
+      timeout: 120
+
+  - model_name: "claude-3-5-haiku-20241022"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 16384
+      timeout: 120
+
+  - model_name: "claude-3-haiku-20240307"
+    litellm_params:
+      model: openai/your-model-name
+      api_base: http://host.docker.internal:8000/v1
+      api_key: your-api-key
+      temperature: 0.55
+      max_tokens: 16384
+      timeout: 120

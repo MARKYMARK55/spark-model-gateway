@@ -1,0 +1,35 @@
+# docker-compose.yml
+# ==================
+# LiteLLM proxy — routes claude-* model names to a local inference server.
+#
+# Prerequisites:
+#   - A running local model server (vLLM, Ollama, LM Studio, llama.cpp, NIM…)
+#   - Edit litellm_claude_local.yaml: set your model ID and api_base
+#
+# Start:  docker compose up -d
+# Logs:   docker compose logs -f
+# Stop:   docker compose down
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm-claude-local
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm_claude_local.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: "simple-api-key"
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets the container reach host ports on Linux
+    healthcheck:
+      test: >
+        python3 -c "import urllib.request as u; u.urlopen(u.Request(
+          'http://localhost:4000/health/readiness',
+          headers={'Authorization':'Bearer simple-api-key'}))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s

@@ -221,8 +221,10 @@ claude</pre>
 </div>
 
 <script>
-const LITELLM_URL = "http://localhost:4000";
-const VLLM_URL    = "http://localhost:8000";
+// Use the same host the page was served from so remote browsers work correctly
+const _HOST       = window.location.hostname || "localhost";
+const LITELLM_URL = `http://${_HOST}:4000`;
+const VLLM_URL    = `http://${_HOST}:8000`;
 const LITELLM_KEY = "simple-api-key";
 
 function _dot(ok)  { return `<span class="dot ${ok ? 'green' : 'red'}"></span>`; }
@@ -243,7 +245,7 @@ async function load() {
   try {
     const r = await fetch(`${VLLM_URL}/v1/models`, {
       headers: { Authorization: "Bearer EMPTY" },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
     });
     const data = (await r.json()).data || [];
     if (data.length) vllmModel = data[0].id;
@@ -253,7 +255,7 @@ async function load() {
   try {
     const r = await fetch(`${LITELLM_URL}/v1/models`, {
       headers: { Authorization: `Bearer ${LITELLM_KEY}` },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
     });
     litellmList = ((await r.json()).data || []).map(m => m.id);
   } catch (_) {}

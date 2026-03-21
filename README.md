@@ -12,12 +12,15 @@ SparkRun launches a model onto the DGX Spark GPU. vLLM serves it on an OpenAI-co
 - [Prerequisites](#prerequisites)
 - [Quick start — static config](#quick-start--static-config)
 - [Auto-registration — sparkrun_sync.py](#auto-registration--sparkrun_syncpy)
+- [Recommended models for DGX Spark](#recommended-models-for-dgx-spark)
 - [Model routing & temperature guide](#model-routing--temperature-guide)
 - [⚠️ The Claude Code CLI conflict](#️-the-claude-code-cli-conflict)
+- [Status dashboard](#status-dashboard)
 - [LiteLLM UI](#litellm-ui)
 - [Using with Open WebUI](#using-with-open-webui)
 - [Using with Langflow](#using-with-langflow)
 - [Using with your own code](#using-with-your-own-code)
+- [Smoke test](#smoke-test)
 - [Reference](#reference)
 
 ---
@@ -75,17 +78,72 @@ flowchart TD
 
 ---
 
-## Status page
+## Status dashboard
 
-`status.html` is a zero-dependency browser dashboard. Open it after starting the proxy to see live status without running curl commands:
+`status.html` is a zero-dependency browser dashboard that gives you a live view of the full stack — no Python server, no extra dependencies, no installation. Open it any time to check whether SparkRun has a model loaded, whether LiteLLM has registered it, and to grab the exact shell commands needed to connect Claude Code to it.
 
 ```bash
-# Serve locally (needed so fetch() can reach localhost endpoints)
+# Serve locally — required so fetch() can reach localhost:4000 and localhost:8000
 python3 -m http.server 8900 --directory .
-# Then open http://localhost:8900/status.html
 ```
 
-Shows: vLLM model loaded, LiteLLM proxy reachable, `local-coder` and `claude-sonnet-4-5` alias registration, active presets, copy-to-clipboard launch commands. Auto-refreshes on open; hit ↻ to re-poll.
+Then open **http://localhost:8900/status.html** in your browser.
+
+### What it shows
+
+```mermaid
+flowchart LR
+    subgraph Browser["status.html (browser)"]
+        S1["● vLLM model loaded"]
+        S2["● LiteLLM proxy reachable"]
+        S3["● local-coder alias registered"]
+        S4["● claude-sonnet-4-5 registered"]
+        P["Active presets\n(Qwen3-Coder-Fast · Code · Expert…)"]
+        R["Best code model recommendation"]
+        C1["Copy: inline env-var launch command"]
+        C2["Copy: ~/.bashrc alias"]
+    end
+
+    vLLM["vLLM :8000\n/v1/models"] -->|fetch| S1
+    LM["LiteLLM :4000\n/v1/models"] -->|fetch| S2
+    LM -->|fetch| S3
+    LM -->|fetch| S4
+    LM -->|fetch| P
+```
+
+| Element | What it tells you |
+|---|---|
+| **vLLM model** | The exact model ID currently served on port 8000 — confirms SparkRun loaded it successfully |
+| **LiteLLM proxy** | Whether the proxy is reachable and how many models are registered in total |
+| **local-coder alias** | Whether `sparkrun_sync.py` has run and registered the stable coding alias |
+| **claude-sonnet-4-5** | Whether the Anthropic-format alias is live — this is what Claude Code CLI uses |
+| **Active presets** | All preset tags registered for the current model (Fast, Expert, Code, Heavy, Max) |
+| **Best code model** | Shows the loaded model name if it's a coder variant, otherwise recommends `Qwen3-Coder-Next-FP8` |
+| **Copy buttons** | One-click copy of the inline env-var command and the `~/.bashrc` alias — ready to paste into a terminal |
+
+### Why serve it with `python3 -m http.server`?
+
+Browsers block `fetch()` calls to `localhost` when a page is opened as `file://` (CORS restriction). Serving via a local HTTP server takes one second and sidesteps this entirely. Leave it running in a tmux pane:
+
+```bash
+# In a tmux pane — one-time setup
+python3 -m http.server 8900 --directory ~/sparkrun-litellm-local
+```
+
+### Typical workflow
+
+```bash
+# 1. Load a model
+sparkrun run qwen3-coder-next-vllm
+
+# 2. Run the sync daemon (registers presets in LiteLLM)
+python auto-register/sparkrun_sync.py --once
+
+# 3. Open the dashboard — all four dots should be green
+open http://localhost:8900/status.html
+
+# 4. Hit Copy on "Launch Claude Code locally" and paste into a new terminal
+```
 
 ---
 
@@ -535,6 +593,45 @@ print(resp.choices[0].message.content)
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:4000"
 export ANTHROPIC_AUTH_TOKEN="simple-api-key"
+```
+
+---
+
+## Smoke test
+
+`smoke_test.py` verifies the full stack end-to-end from the command line — useful after first setup or after swapping models.
+
+```bash
+pip install -r requirements.txt
+python smoke_test.py
+```
+
+Runs four steps in order:
+
+| Step | What it checks | Pass condition |
+|---|---|---|
+| 1 | `GET localhost:8000/v1/models` | vLLM is up and returns a model ID |
+| 2 | `GET localhost:4000/v1/models` | LiteLLM is up; `local-coder` alias is present |
+| 3 | Anthropic SDK request via proxy | Response streams back; `msg.model` shows the underlying vLLM model ID |
+| 4 | Thinking block present (Qwen3 / Nemotron only) | `<think>…</think>` appears in response — warns if absent, does not fail |
+
+```
+[ STEP 1 ] Checking vLLM endpoint...
+  ✓ PASS: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4
+[ STEP 2 ] Checking LiteLLM registration...
+  ✓ PASS: 49 models registered — local-coder found
+[ STEP 3 ] End-to-end request via Anthropic SDK...
+  ✓ PASS: routed to nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4
+[ STEP 4 ] Thinking block check (Nemotron)...
+  ✓ PASS: <think> block present
+
+4/4 steps passed
+```
+
+Override defaults with CLI flags:
+
+```bash
+python smoke_test.py --litellm-url http://localhost:4000 --vllm-url http://localhost:8000 --key simple-api-key
 ```
 
 ---

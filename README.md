@@ -283,6 +283,62 @@ journalctl --user -fu sparkrun-sync
 
 ---
 
+## Recommended models for DGX Spark
+
+The NVIDIA DGX Spark has a **GB200 NVL2** — two Blackwell GPUs with **384 GB of unified memory** shared across both dies. This rules out nothing in the open-weight space and allows multi-node tensor parallelism via SparkRun's `--tp` flag when running a cluster.
+
+```mermaid
+graph LR
+    subgraph DGX["DGX Spark — GB200 NVL2 (384 GB)"]
+        subgraph TP1["TP1 — single GPU"]
+            M1["Qwen3-30B-A3B ⭐ best all-round"]
+            M2["Qwen3.5-35B-A3B ⭐ best coding"]
+            M3["Qwen3.5-27B-FP8"]
+            M4["Nemotron-Nano-30B (eugr)"]
+        end
+        subgraph TP2["TP2 — both GPUs"]
+            M5["Qwen3.5-122B-A10B ⭐ best reasoning"]
+            M6["Nemotron-Super-120B (eugr)"]
+            M7["GPT-OSS-120B (eugr)"]
+        end
+    end
+```
+
+### Recommended picks
+
+| Model | SparkRun recipe | Thinking style | Best for | claude alias |
+|---|---|---|---|---|
+| **Qwen3.5-35B-A3B** | `qwen35-35b-vllm` | `thinking_budget` | Coding, instruction following | `claude-sonnet-4-5` |
+| **Qwen3-30B-A3B** | `qwen3-30b-vllm` | `thinking_budget` | All-round, fast thinking | `claude-sonnet-4-5` |
+| **Qwen3.5-122B-A10B** | `qwen35-122b-vllm --tp 2` | `thinking_budget` | Complex reasoning, long context | `claude-opus-4-5` |
+| **Nemotron-Nano-30B** | `nemotron-nano-vllm` | `nemotron` | Synthesis presets, DGX-optimised | `claude-sonnet-4-5` |
+| **Nemotron-Super-120B** | `nemotron-super-vllm --tp 2` | `nemotron` | Flagship NVIDIA model | `claude-opus-4-5` |
+| **Qwen3-Coder-Next** | `qwen3-coder-vllm` | `thinking_budget` | Pure code generation, agentic tasks | `claude-sonnet-4-5` |
+
+### Notes
+
+- **TP1 models** (30B–35B MoE) load on a single GPU partition — faster cold-start, lower VRAM pressure
+- **TP2 models** (120B+) use both GPUs via tensor parallelism — higher quality, ~2× slower start
+- **MoE architecture** (Qwen3-30B-A3B is 30B params / 3B active) gives 70B-class quality at 30B inference cost
+- **eugr runtime** (NVIDIA-optimised vLLM fork) squeezes 10–20% more throughput on Blackwell for Nemotron models — specify in the SparkRun recipe if available
+- FP8 variants (suffix `-FP8`) are preferred on Blackwell — native hardware support, minimal quality loss
+- All models above have entries in `auto-register/models.yaml` with the correct thinking style pre-configured
+
+### Swap models on the fly
+
+```bash
+# Start with a fast all-round model
+sparkrun run qwen3-30b-vllm
+
+# Switch to the coding specialist for a coding session
+sparkrun stop qwen3-30b-vllm
+sparkrun run qwen3-coder-next-vllm
+
+# sparkrun_sync.py detects the change within 30s and updates LiteLLM automatically
+```
+
+---
+
 ## Model routing & temperature guide
 
 Both modes map three tiers of Claude model name to the active vLLM model with tuned settings per tier:

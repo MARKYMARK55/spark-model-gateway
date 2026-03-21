@@ -75,6 +75,20 @@ flowchart TD
 
 ---
 
+## Status page
+
+`status.html` is a zero-dependency browser dashboard. Open it after starting the proxy to see live status without running curl commands:
+
+```bash
+# Serve locally (needed so fetch() can reach localhost endpoints)
+python3 -m http.server 8900 --directory .
+# Then open http://localhost:8900/status.html
+```
+
+Shows: vLLM model loaded, LiteLLM proxy reachable, `local-coder` and `claude-sonnet-4-5` alias registration, active presets, copy-to-clipboard launch commands. Auto-refreshes on open; hit ↻ to re-poll.
+
+---
+
 ## Quick start — static config
 
 Use this when you run one model at a time and don't mind restarting the proxy when it changes.

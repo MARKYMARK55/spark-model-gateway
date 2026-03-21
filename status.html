@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SparkRun · LiteLLM Status</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #f8f9fb;
+    --surface:   #ffffff;
+    --border:    #e5e7eb;
+    --primary:   #2563eb;
+    --primary-l: #eff6ff;
+    --green:     #16a34a;
+    --red:       #dc2626;
+    --text:      #111827;
+    --muted:     #6b7280;
+    --code-bg:   #f3f4f6;
+    --radius:    12px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 24px rgba(0,0,0,.07);
+    width: 100%;
+    max-width: 520px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-left { display: flex; align-items: center; gap: 10px; }
+  .anthropic-icon {
+    width: 22px; height: 22px; border-radius: 5px;
+    image-rendering: -webkit-optimize-contrast;
+  }
+  h1 {
+    font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+  }
+  .refresh-btn {
+    background: none; border: 1px solid var(--border); border-radius: 7px;
+    color: var(--muted); cursor: pointer; font-size: 15px; padding: 3px 9px;
+    transition: all .15s; line-height: 1;
+  }
+  .refresh-btn:hover { background: var(--primary-l); color: var(--primary); border-color: var(--primary); }
+  .refresh-btn.spinning { animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Status rows ── */
+  .status-grid { display: flex; flex-direction: column; gap: 7px; }
+  .status-row {
+    display: grid;
+    grid-template-columns: 10px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+    background: var(--border); transition: background .3s;
+  }
+  .dot.green { background: var(--green); }
+  .dot.red   { background: var(--red); }
+  .dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .row-label { color: var(--text); font-weight: 500; }
+  .row-val   { font-size: 11px; color: var(--muted); text-align: right; font-family: monospace; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-val.ok  { color: var(--green); font-family: inherit; font-weight: 500; }
+  .row-val.bad { color: var(--red);   font-family: inherit; font-weight: 500; }
+
+  /* ── Divider ── */
+  hr { border: none; border-top: 1px solid var(--border); }
+
+  /* ── Presets ── */
+  .presets-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
+  .preset-tag {
+    font-size: 10px; padding: 2px 9px; border-radius: 10px;
+    background: var(--primary-l); color: var(--primary);
+    border: 1px solid #bfdbfe; font-weight: 500;
+  }
+  .no-presets { font-size: 12px; color: var(--muted); font-style: italic; }
+
+  /* ── Rec row ── */
+  .rec-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px;
+  }
+  .rec-label { color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .5px; font-size: 11px; }
+  .rec-val   { font-weight: 600; color: var(--text); }
+
+  /* ── Command blocks ── */
+  .cmd-block {
+    border: 1px solid var(--border); border-radius: 9px; overflow: hidden;
+  }
+  .cmd-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 12px; background: var(--code-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .cmd-label {
+    font-size: 10px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .copy-btn {
+    font-size: 11px; padding: 3px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--muted); cursor: pointer; transition: all .15s; font-weight: 500;
+  }
+  .copy-btn:hover  { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .copy-btn.copied { background: var(--green);   color: #fff; border-color: var(--green); }
+  pre.cmd-pre {
+    margin: 0; padding: 12px; font-size: 12px; line-height: 1.7;
+    font-family: "SF Mono", "Fira Code", monospace;
+    background: var(--surface); color: var(--text);
+    white-space: pre-wrap; word-break: break-all;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    font-size: 11px; color: var(--muted); text-align: center;
+  }
+  .footer a { color: var(--primary); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+
+  /* ── Loading skeleton ── */
+  .skeleton { color: var(--muted); font-size: 13px; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="card">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <img class="anthropic-icon"
+           src="https://www.anthropic.com/favicon.ico"
+           alt="Anthropic"
+           onerror="this.style.display='none'">
+      <h1>Claude Code — Local Model</h1>
+    </div>
+    <button class="refresh-btn" id="refreshBtn" title="Refresh">↻</button>
+  </div>
+
+  <!-- Status rows -->
+  <div class="status-grid" id="statusGrid">
+    <div class="status-row">
+      <span class="dot pulse"></span>
+      <span class="row-label">Checking…</span>
+      <span class="row-val"></span>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- Presets -->
+  <div class="presets-wrap" id="presetsWrap">
+    <span class="no-presets">No presets registered</span>
+  </div>
+
+  <!-- Best model recommendation -->
+  <div class="rec-row">
+    <span class="rec-label">Best code model</span>
+    <span class="rec-val" id="recModel">—</span>
+  </div>
+
+  <hr>
+
+  <!-- Launch command -->
+  <div class="cmd-block">
+    <div class="cmd-header">
+      <span class="cmd-label">Launch Claude Code locally</span>
+      <button class="copy-btn" id="copyCmd">Copy</button>
+    </div>
+    <pre class="cmd-pre">ANTHROPIC_BASE_URL=http://localhost:4000 \
+ANTHROPIC_AUTH_TOKEN=simple-api-key \
+claude</pre>
+  </div>
+
+  <!-- Alias -->
+  <div class="cmd-block">
+    <div class="cmd-header">
+      <span class="cmd-label">Or add alias to ~/.bashrc</span>
+      <button class="copy-btn" id="copyAlias">Copy</button>
+    </div>
+    <pre class="cmd-pre">alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 \
+  ANTHROPIC_AUTH_TOKEN=simple-api-key claude'</pre>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <a href="http://localhost:4000/ui" target="_blank">LiteLLM UI</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/MARKYMARK55/sparkrun-litellm-local" target="_blank">GitHub</a>
+    &nbsp;·&nbsp;
+    <span id="lastUpdated">—</span>
+  </div>
+
+</div>
+
+<script>
+const LITELLM_URL = "http://localhost:4000";
+const VLLM_URL    = "http://localhost:8000";
+const LITELLM_KEY = "simple-api-key";
+
+function _dot(ok)  { return `<span class="dot ${ok ? 'green' : 'red'}"></span>`; }
+function _val(txt, cls) { return `<span class="row-val ${cls||''}">${txt}</span>`; }
+
+function _row(ok, label, valHtml) {
+  return `<div class="status-row">${_dot(ok)}<span class="row-label">${label}</span>${valHtml}</div>`;
+}
+
+async function load() {
+  const btn = document.getElementById("refreshBtn");
+  btn.classList.add("spinning");
+
+  let vllmModel   = null;
+  let litellmList = [];
+
+  // ── vLLM ──────────────────────────────────────────────────────────────
+  try {
+    const r = await fetch(`${VLLM_URL}/v1/models`, {
+      headers: { Authorization: "Bearer EMPTY" },
+      signal: AbortSignal.timeout(4000),
+    });
+    const data = (await r.json()).data || [];
+    if (data.length) vllmModel = data[0].id;
+  } catch (_) {}
+
+  // ── LiteLLM ───────────────────────────────────────────────────────────
+  try {
+    const r = await fetch(`${LITELLM_URL}/v1/models`, {
+      headers: { Authorization: `Bearer ${LITELLM_KEY}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    litellmList = ((await r.json()).data || []).map(m => m.id);
+  } catch (_) {}
+
+  const litellmUp  = litellmList.length > 0;
+  const hasLocal   = litellmList.includes("local-coder");
+  const hasSonnet  = litellmList.includes("claude-sonnet-4-5");
+  const shortName  = vllmModel ? vllmModel.split("/").pop() : null;
+  const presets    = shortName
+    ? litellmList.filter(m => m.toLowerCase().includes(shortName.toLowerCase().slice(0,8)))
+    : [];
+
+  // ── Status rows ───────────────────────────────────────────────────────
+  const grid = document.getElementById("statusGrid");
+  grid.innerHTML = [
+    _row(!!vllmModel, "vLLM model",
+         _val(vllmModel || "Nothing loaded", vllmModel ? "" : "bad")),
+    _row(litellmUp, "LiteLLM proxy",
+         _val(litellmUp ? `${litellmList.length} models registered` : "Not reachable", litellmUp ? "" : "bad")),
+    _row(hasLocal, "local-coder alias",
+         _val(hasLocal ? "Registered ✓" : "Not registered", hasLocal ? "ok" : "bad")),
+    _row(hasSonnet, "claude-sonnet-4-5",
+         _val(hasSonnet ? "Registered ✓" : "Not registered", hasSonnet ? "ok" : "bad")),
+  ].join("");
+
+  // ── Presets ───────────────────────────────────────────────────────────
+  const presetsWrap = document.getElementById("presetsWrap");
+  presetsWrap.innerHTML = presets.length
+    ? presets.map(p => `<span class="preset-tag">${p}</span>`).join("")
+    : `<span class="no-presets">${vllmModel ? "No presets matched — run sparkrun_sync.py" : "No model loaded"}</span>`;
+
+  // ── Recommendation ────────────────────────────────────────────────────
+  const recEl = document.getElementById("recModel");
+  recEl.textContent = shortName && shortName.toLowerCase().includes("coder")
+    ? shortName
+    : "Qwen3-Coder-Next-FP8 (recommended)";
+
+  // ── Timestamp ─────────────────────────────────────────────────────────
+  document.getElementById("lastUpdated").textContent =
+    "Updated " + new Date().toLocaleTimeString();
+
+  btn.classList.remove("spinning");
+}
+
+// ── Copy helpers ──────────────────────────────────────────────────────────
+function copyText(btn, text) {
+  const flash = () => {
+    btn.textContent = "Copied!"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1800);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(flash).catch(() => execCopy(text, flash));
+  } else {
+    execCopy(text, flash);
+  }
+}
+function execCopy(text, cb) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); cb(); } catch(_) {}
+  document.body.removeChild(ta);
+}
+
+document.getElementById("copyCmd").addEventListener("click", function() {
+  copyText(this, "ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=simple-api-key claude");
+});
+document.getElementById("copyAlias").addEventListener("click", function() {
+  copyText(this, "alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=simple-api-key claude'");
+});
+document.getElementById("refreshBtn").addEventListener("click", load);
+
+// Auto-load on open
+load();
+</script>
+</body>
+</html>

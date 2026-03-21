@@ -2,7 +2,7 @@
 
 Route any Anthropic-SDK application — **Open WebUI, Langflow, n8n, your own code** — to a local model server by mapping `claude-*` model names through a [LiteLLM](https://github.com/BerriAI/litellm) proxy.
 
-Your local model (vLLM, Ollama, LM Studio, llama.cpp, NVIDIA NIM, **SparkRun**…) answers every request that asks for `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-haiku-3-5`, and all versioned aliases — without changing a single line of application code.
+Your local model (vLLM, Ollama, LM Studio, llama.cpp, NVIDIA NIM, **[SparkRun](https://sparkrun.dev)**…) answers every request that asks for `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-haiku-3-5`, and all versioned aliases — without changing a single line of application code.
 
 ---
 
@@ -17,7 +17,7 @@ Your local model (vLLM, Ollama, LM Studio, llama.cpp, NVIDIA NIM, **SparkRun**�
 - [Using with Open WebUI](#using-with-open-webui)
 - [Using with Langflow](#using-with-langflow)
 - [Using with your own code](#using-with-your-own-code)
-- [LiteLLM reference](#litellm-reference)
+- [Reference](#reference)
 
 ---
 
@@ -34,21 +34,21 @@ flowchart TD
     subgraph Proxy["LiteLLM Proxy — port 4000"]
         direction TB
         L["Request received\nAnthropic format"]
-        M["litellm_claude_local.yaml\nclaude-opus-*  → Heavy T=0.55\nclaude-sonnet-* → Code  T=0.10\nclaude-haiku-*  → Fast  T=0.55"]
+        M["litellm_claude_local.yaml\nclaude-opus-*  → Heavy  T=0.55\nclaude-sonnet-* → Code  T=0.10\nclaude-haiku-*  → Fast   T=0.55"]
         D["drop_params: true\nStrips betas, cache_control,\nextended thinking headers"]
         T["Translated to\nOpenAI format"]
         L --> M --> D --> T
     end
 
     subgraph Local["Local Inference Server"]
-        S1["SparkRun\n:8085"]
-        S2["vLLM\n:8000"]
-        S3["Ollama\n:11434"]
-        S4["LM Studio\n:1234"]
+        S1["SparkRun\nsparkrun.dev"]
+        S2["vLLM"]
+        S3["Ollama"]
+        S4["LM Studio / llama.cpp"]
     end
 
     subgraph GPU["Hardware"]
-        G["Your GPU\nNemotron / Qwen / Llama / …"]
+        G["Your GPU\nQwen / Llama / Nemotron / …"]
     end
 
     Apps --> Proxy
@@ -76,10 +76,10 @@ cd claude-local-stack
 Edit `litellm_claude_local.yaml` — find every `your-model-name` and `your-api-key` and replace them:
 
 ```yaml
-# Example for vLLM serving Qwen2.5-Coder-32B
+# Example for vLLM or SparkRun (default port 8000)
 model: openai/Qwen/Qwen2.5-Coder-32B-Instruct
 api_base: http://host.docker.internal:8000/v1
-api_key: your-vllm-api-key          # or "EMPTY" if no auth configured
+api_key: your-api-key          # or "EMPTY" if no auth configured
 
 # Example for Ollama
 model: openai/qwen2.5-coder:32b
@@ -113,74 +113,83 @@ You should see all 11 `claude-*` model names listed.
 
 ## Using with SparkRun
 
-[SparkRun](https://github.com/scitrera/oss-spark-run) is a lightweight inference task runner that wraps a vLLM endpoint and exposes model presets via a small REST API. The workflow is:
+[SparkRun](https://sparkrun.dev) is a CLI tool for launching and managing LLM inference workloads on NVIDIA DGX Spark systems. It eliminates the need for Slurm or Kubernetes — pick a recipe, run it, and SparkRun handles container orchestration, model distribution, and networking automatically. It supports vLLM, SGLang, llama.cpp, and eugr-vllm runtimes.
 
-1. SparkRun loads a model onto your GPU (`http://localhost:8085`)
-2. vLLM serves it on the OpenAI-compatible API (`http://localhost:8000/v1`)
-3. LiteLLM proxies claude-* requests to that vLLM endpoint
+Once a recipe is running, vLLM exposes an OpenAI-compatible API endpoint that LiteLLM connects to.
 
 ```mermaid
 sequenceDiagram
     participant App as App / Open WebUI
     participant LM as LiteLLM :4000
-    participant SR as SparkRun :8085
-    participant vL as vLLM :8000/v1
-    participant GPU as GPU
+    participant vL as vLLM :8000/v1<br/>(launched by SparkRun)
+    participant GPU as DGX Spark GPU
 
     App->>LM: POST /v1/messages<br/>model: claude-sonnet-4-5
     LM->>LM: Map alias → local model<br/>Translate Anthropic → OpenAI format<br/>drop_params strips unsupported fields
-    LM->>vL: POST /v1/chat/completions<br/>model: nvidia/Nemotron-...
+    LM->>vL: POST /v1/chat/completions<br/>model: Qwen/Qwen3-30B-A3B
     vL->>GPU: Forward to loaded model
     GPU-->>vL: Token stream
     vL-->>LM: OpenAI response
     LM-->>App: Anthropic response format
 ```
 
-### Step 1 — Check what model SparkRun has loaded
+### Step 1 — Install SparkRun and launch a model
 
 ```bash
-curl http://localhost:8085/status
-# {"status":"ok","sparkrun":"0.1.13","recipes":12,...}
+# Install SparkRun
+uvx sparkrun setup install
 
-# List available model presets
-curl http://localhost:4000/v1/models \
-  -H "Authorization: Bearer simple-api-key" | python3 -c \
-  "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
+# Launch a model recipe (vLLM exposes it on port 8000 by default)
+sparkrun run qwen3-30b-vllm
+
+# Or with a custom port
+sparkrun run qwen3-30b-vllm --port 9000
+
+# Check status
+sparkrun status
 ```
 
-### Step 2 — Set your model ID in the config
+See [sparkrun.dev](https://sparkrun.dev) for the full recipe catalogue, multi-node `--tp` flag usage, and cluster configuration.
 
-Find the model ID that vLLM is using. It's usually the HuggingFace path of the loaded model:
+### Step 2 — Find the model ID vLLM is serving
 
 ```bash
+# Query the vLLM models endpoint directly
 curl http://localhost:8000/v1/models | python3 -m json.tool
-# Look for: "id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
+# Look for: "id": "Qwen/Qwen3-30B-A3B"
 ```
 
-Update `litellm_claude_local.yaml` — replace `your-model-name` with the exact ID:
+### Step 3 — Set the model ID in the config
+
+Update `litellm_claude_local.yaml` — replace `your-model-name` with the exact ID returned above:
 
 ```yaml
 litellm_params:
-  model: openai/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4
+  model: openai/Qwen/Qwen3-30B-A3B
   api_base: http://host.docker.internal:8000/v1
-  api_key: simple-api-key
+  api_key: EMPTY
 ```
 
-### Step 3 — Register claude aliases dynamically (no restart)
-
-LiteLLM supports live model registration via API. Use the SparkRun proxy `register_model.py` script or register directly:
+Then restart the proxy to pick up the change:
 
 ```bash
-# Register claude-sonnet-4-5 pointing at your running SparkRun model
+docker compose restart
+```
+
+### Step 4 — Register aliases dynamically (no restart needed)
+
+LiteLLM also supports live model registration via API — useful when SparkRun switches models without restarting the whole proxy:
+
+```bash
 curl -X POST http://localhost:4000/model/new \
   -H "Authorization: Bearer simple-api-key" \
   -H "Content-Type: application/json" \
   -d '{
     "model_name": "claude-sonnet-4-5",
     "litellm_params": {
-      "model": "openai/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
+      "model": "openai/Qwen/Qwen3-30B-A3B",
       "api_base": "http://host.docker.internal:8000/v1",
-      "api_key": "simple-api-key",
+      "api_key": "EMPTY",
       "temperature": 0.10,
       "max_tokens": 16384,
       "timeout": 300
@@ -188,17 +197,7 @@ curl -X POST http://localhost:4000/model/new \
   }'
 ```
 
-Or use the Python helper included in [spark-scholar](https://github.com/MARKYMARK55/Spark-Scholar):
-
-```bash
-python3 register_model.py \
-  --base-model "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4" \
-  --display-name "claude-sonnet-4-5" \
-  --api-base "http://host.docker.internal:8000/v1" \
-  --litellm-url "http://localhost:4000"
-```
-
-### Step 4 — Verify end-to-end
+### Step 5 — Verify end-to-end
 
 ```bash
 curl http://localhost:4000/v1/messages \
@@ -249,7 +248,7 @@ api_base: http://192.168.1.50:8000/v1
 
 ### Adding models that aren't aliased
 
-Add any new entry directly to `model_list` in `litellm_claude_local.yaml`. No restart needed if you use the [LiteLLM UI](https://docs.litellm.ai/docs/proxy/ui) to add them at runtime.
+Add any new entry directly to `model_list` in `litellm_claude_local.yaml`. No restart needed if you use the [LiteLLM UI](https://docs.litellm.ai/docs/proxy/ui) or the `/model/new` API to add them at runtime.
 
 ---
 
@@ -271,7 +270,7 @@ Applications choose the model tier that matches the task. Sonnet is most commonl
 
 ## ⚠️ The Claude Code CLI conflict
 
-This section is important if you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (the terminal coding assistant) **as a CLI tool on the same machine**.
+This section is important if you use [Claude Code](https://code.claude.com) (the terminal coding assistant) **as a CLI tool on the same machine**.
 
 ### What causes the conflict
 
@@ -282,14 +281,16 @@ ANTHROPIC_BASE_URL   # where to send API requests
 ANTHROPIC_AUTH_TOKEN # API key to use
 ```
 
-If these are set in your shell — and LiteLLM has `claude-*` model aliases registered — **every Claude Code request silently routes to your local model instead of Anthropic's API**. You get Nemotron (or whatever you're running) answering as if it were Claude Sonnet. The CLI gives no warning.
+If these are set in your shell — and LiteLLM has `claude-*` model aliases registered — **every Claude Code request silently routes to your local model instead of Anthropic's API**. You get your local model answering as if it were Claude Sonnet. The CLI gives no warning.
+
+See the official Anthropic documentation: [LLM Gateway — Claude Code](https://code.claude.com/docs/en/llm-gateway).
 
 ### Who is affected
 
 | Surface | Affected? | Why |
 |---|---|---|
 | **Claude Code CLI** (`claude` in terminal) | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | CLI reads env vars at startup |
-| **Claude Desktop app** | ❌ No | Connects directly to `api.anthropic.com`, ignores env vars |
+| **Claude Desktop app** | ❌ No | Connects directly to `api.anthropic.com`, ignores shell env vars |
 | **Claude web app** | ❌ No | Browser-based, no access to shell env |
 | **Open WebUI** | ❌ No | Connects to LiteLLM via its own settings, not shell env |
 | **Your own code using Anthropic SDK** | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | SDK reads env vars |
@@ -324,35 +325,18 @@ claude-local    # → local model via LiteLLM (explicit, intentional)
 
 **Pattern 3 — Separate port for Claude Code CLI**
 
-If you want a completely isolated setup for the CLI, run a second LiteLLM instance on a different port (e.g. 4003) and only ever point `ANTHROPIC_BASE_URL` at that one. The main port 4000 stays clean for Open WebUI and other tools.
+Run a second LiteLLM instance on a different port (e.g. 4003) and only ever point `ANTHROPIC_BASE_URL` at that one. The main port 4000 stays clean for Open WebUI and other tools.
 
 ### What happens if you do route Claude Code CLI locally
 
 The CLI will work but with reduced capability. Local models (even strong ones) differ from Claude in:
 
-- Tool use reliability — function calling schemas may not be followed as strictly
-- Context window — most local models are 32K–128K vs Claude's 200K
-- Extended thinking — Claude's `thinking` parameter is stripped by `drop_params: true`
-- Instruction following — system prompt fidelity varies by model
+- **Tool use reliability** — function calling schemas may not be followed as strictly
+- **Context window** — most local models are 32K–128K vs Claude's 200K
+- **Extended thinking** — Claude's `thinking` parameter is stripped by `drop_params: true`
+- **Instruction following** — system prompt fidelity varies by model
 
 For agentic coding tasks with file edits, bash commands, and multi-step plans, Claude Sonnet/Opus outperforms current open-weight models. Local routing is best suited for quick questions, summarisation, and experimentation.
-
-### Official Anthropic documentation
-
-Anthropic officially documents custom base URL support and third-party proxy integration:
-
-- [LLM Gateway — Claude Code](https://code.claude.com/docs/en/llm-gateway) — **official** guide to `ANTHROPIC_BASE_URL`, covers LiteLLM, Bedrock, Vertex AI and Foundry pass-through endpoints
-- [Third-party integrations — Claude Code](https://code.claude.com/docs/en/third-party-integrations) — enterprise deployment overview, comparing proxy options and env var configuration
-- [Python SDK — base_url parameter](https://platform.claude.com/docs/en/api/sdks/python) — how to set `base_url` in `anthropic.Anthropic(base_url=...)` or via `ANTHROPIC_BASE_URL`
-
-### LiteLLM documentation references
-
-- [Non-Anthropic models with Claude Code](https://docs.litellm.ai/docs/tutorials/claude_non_anthropic_models) — official LiteLLM tutorial for exactly this setup
-- [MCP server integration](https://docs.litellm.ai/docs/tutorials/claude_mcp) — connecting MCP servers through LiteLLM proxy
-- [Proxy configuration](https://docs.litellm.ai/docs/proxy/configs) — full `config.yaml` reference
-- [`drop_params`](https://docs.litellm.ai/docs/completion/drop_params) — how unsupported parameters are handled
-- [Model routing strategies](https://docs.litellm.ai/docs/routing) — usage-based, latency-based, fallback chains
-- [Virtual keys & spend tracking](https://docs.litellm.ai/docs/proxy/virtual_keys) — add per-user budget limits
 
 ---
 
@@ -454,12 +438,12 @@ export ANTHROPIC_AUTH_TOKEN="simple-api-key"
 | Routing | https://docs.litellm.ai/docs/routing |
 | Docker image | `ghcr.io/berriai/litellm:main-latest` |
 
-### Related
+### SparkRun
 
 | Resource | Link |
 |---|---|
-| SparkRun (inference runner) | https://github.com/scitrera/oss-spark-run |
-| Spark-Scholar (full DGX stack) | https://github.com/MARKYMARK55/Spark-Scholar |
+| Website & docs | https://sparkrun.dev |
+| GitHub | https://github.com/scitrera/sparkrun |
 
 ---
 

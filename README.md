@@ -80,6 +80,8 @@ flowchart TD
 
 ## Status dashboard
 
+![Claude Code Status Dashboard](assets/Status%20Dashboard%20Claude%20Code.png)
+
 `status.html` is a zero-dependency browser dashboard that gives you a live view of the full stack — no Python server, no extra dependencies, no installation. Open it any time to check whether SparkRun has a model loaded, whether LiteLLM has registered it, and to grab the exact shell commands needed to connect Claude Code to it.
 
 ```bash

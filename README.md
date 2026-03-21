@@ -1,18 +1,17 @@
 # SparkRun Auto Model Registration with LiteLLM & Local Claude Code Setup
 
-Route any Anthropic-SDK application — **Open WebUI, Langflow, n8n, your own code** — to a local model server by mapping `claude-*` model names through a [LiteLLM](https://github.com/BerriAI/litellm) proxy.
+Route applications using the Anthropic SDK — **Open WebUI, Langflow, Claude Code CLI** — to models running on your **NVIDIA DGX Spark** via [SparkRun](https://sparkrun.dev) and [vLLM](https://github.com/vllm-project/vllm), by mapping `claude-*` model names through a [LiteLLM](https://github.com/BerriAI/litellm) proxy.
 
-Your local model (vLLM, Ollama, LM Studio, llama.cpp, NVIDIA NIM, **[SparkRun](https://sparkrun.dev)**…) answers every request that asks for `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-haiku-3-5`, and all versioned aliases — without changing a single line of application code.
+SparkRun launches a model onto the DGX Spark GPU. vLLM serves it on an OpenAI-compatible API. LiteLLM sits in front and answers any request for `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-haiku-3-5`, and all versioned aliases — without changing application code.
 
 ---
 
 ## Contents
 
 - [How it works](#how-it-works)
-- [Quick start](#quick-start)
-- [Using with SparkRun](#using-with-sparkrun)
+- [Prerequisites](#prerequisites)
+- [Quick start — static config](#quick-start--static-config)
 - [Auto-registration — sparkrun_sync.py](#auto-registration--sparkrun_syncpy)
-- [Configuration](#configuration)
 - [Model routing & temperature guide](#model-routing--temperature-guide)
 - [⚠️ The Claude Code CLI conflict](#️-the-claude-code-cli-conflict)
 - [Using with Open WebUI](#using-with-open-webui)
@@ -26,331 +25,241 @@ Your local model (vLLM, Ollama, LM Studio, llama.cpp, NVIDIA NIM, **[SparkRun](h
 
 ```mermaid
 flowchart TD
+    subgraph DGX["NVIDIA DGX Spark"]
+        subgraph SR["SparkRun — sparkrun.dev"]
+            CLI["sparkrun run qwen3-30b-vllm"]
+            vLLM["vLLM\nOpenAI-compatible API\nlocalhost:8000/v1"]
+            CLI -->|"container + model\norchestration"| vLLM
+        end
+
+        subgraph Proxy["LiteLLM Proxy — localhost:4000"]
+            MAP["claude-opus-*  → vLLM  T=0.55\nclaude-sonnet-* → vLLM  T=0.10\nclaude-haiku-*  → vLLM  T=0.55"]
+            DROP["drop_params: true\nStrips Anthropic-only fields\nbetas, cache_control, thinking headers"]
+            MAP --> DROP
+        end
+
+        DB[("PostgreSQL\nDynamic model store\n(auto-register mode)")]
+        SYNC["sparkrun_sync.py\nPoll → register/deregister\nno proxy restart needed"]
+
+        vLLM -->|"model detected"| SYNC
+        SYNC <-->|"/model/new\n/model/delete"| DB
+        DB --> Proxy
+    end
+
     subgraph Apps["Applications"]
-        A1["Open WebUI\nmodel: claude-sonnet-4-5"]
-        A2["Langflow / n8n"]
-        A3["Your code\nAnthropic SDK"]
+        OW["Open WebUI"]
+        LF["Langflow"]
+        CC["Claude Code CLI\n(with ANTHROPIC_BASE_URL)"]
+        SDK["Your code\nAnthropic / OpenAI SDK"]
     end
 
-    subgraph Proxy["LiteLLM Proxy — port 4000"]
-        direction TB
-        L["Request received\nAnthropic format"]
-        M["litellm_claude_local.yaml\nclaude-opus-*  → Heavy  T=0.55\nclaude-sonnet-* → Code  T=0.10\nclaude-haiku-*  → Fast   T=0.55"]
-        D["drop_params: true\nStrips betas, cache_control,\nextended thinking headers"]
-        T["Translated to\nOpenAI format"]
-        L --> M --> D --> T
-    end
-
-    subgraph Local["Local Inference Server"]
-        S1["SparkRun\nsparkrun.dev"]
-        S2["vLLM"]
-        S3["Ollama"]
-        S4["LM Studio / llama.cpp"]
-    end
-
-    subgraph GPU["Hardware"]
-        G["Your GPU\nQwen / Llama / Nemotron / …"]
-    end
-
-    Apps --> Proxy
-    Proxy --> Local
-    Local --> GPU
-    GPU -->|"Response\n(OpenAI format)"| Local
-    Local -->|"Translated back to\nAnthropic format"| Apps
+    Apps -->|"model: claude-sonnet-4-5\nAnthropic format"| Proxy
+    Proxy -->|"model: Qwen/Qwen3-30B-A3B\nOpenAI format"| vLLM
+    vLLM -->|"OpenAI response"| Proxy
+    Proxy -->|"Anthropic response"| Apps
 ```
 
-LiteLLM acts as a **translation layer**. It receives requests in Anthropic format, rewrites them to OpenAI format (which every local server understands), and forwards them. Responses are translated back before being returned. The calling application never knows a local model answered.
+**LiteLLM** translates between Anthropic format (what apps send) and OpenAI format (what vLLM expects). `drop_params: true` silently strips Anthropic-only parameters — `betas`, `cache_control`, extended thinking headers — that would cause errors on the vLLM endpoint.
 
-`drop_params: true` in the config silently strips parameters that only Anthropic supports (`betas`, `cache_control`, extended thinking headers, etc.) so they don't cause errors on the local endpoint.
+**sparkrun_sync.py** watches vLLM on port 8000. When SparkRun loads a new model it registers presets and claude aliases into the LiteLLM database automatically. When the model is unloaded it cleans them up.
 
 ---
 
-## Quick start
+## Prerequisites
 
-**1. Clone and configure**
+- NVIDIA DGX Spark with GPU access
+- [SparkRun](https://sparkrun.dev) installed: `uvx sparkrun setup install`
+- Docker (for LiteLLM proxy)
+- Python 3.11+ (for sparkrun_sync.py)
+
+---
+
+## Quick start — static config
+
+Use this when you run one model at a time and don't mind restarting the proxy when it changes.
+
+**1. Clone**
 
 ```bash
 git clone https://github.com/MARKYMARK55/sparkrun-litellm-local.git
 cd sparkrun-litellm-local
 ```
 
-Edit `litellm_claude_local.yaml` — find every `your-model-name` and `your-api-key` and replace them:
+**2. Launch a model with SparkRun**
 
-```yaml
-# Example for vLLM or SparkRun (default port 8000)
-model: openai/Qwen/Qwen2.5-Coder-32B-Instruct
-api_base: http://host.docker.internal:8000/v1
-api_key: your-api-key          # or "EMPTY" if no auth configured
-
-# Example for Ollama
-model: openai/qwen2.5-coder:32b
-api_base: http://host.docker.internal:11434/v1
-api_key: ollama
+```bash
+sparkrun run qwen3-30b-vllm
+sparkrun status
 ```
 
-**2. Start the proxy**
+**3. Find the exact model ID vLLM is serving**
+
+```bash
+curl http://localhost:8000/v1/models | python3 -m json.tool
+# Note the "id" field — e.g. "Qwen/Qwen3-30B-A3B"
+```
+
+**4. Set the model ID in the config**
+
+Edit `litellm_claude_local.yaml` — replace `your-model-name` in every entry:
+
+```yaml
+litellm_params:
+  model: openai/Qwen/Qwen3-30B-A3B   # ← exact id from step 3
+  api_base: http://host.docker.internal:8000/v1
+  api_key: EMPTY
+```
+
+**5. Start the proxy**
 
 ```bash
 docker compose up -d
 ```
 
-**3. Verify**
+**6. Verify**
 
 ```bash
+# Check aliases are registered
 curl http://localhost:4000/v1/models \
   -H "Authorization: Bearer simple-api-key" | python3 -m json.tool
-```
 
-You should see all 11 `claude-*` model names listed.
-
-**4. Point your app at the proxy**
-
-| Setting | Value |
-|---|---|
-| API base URL | `http://localhost:4000/v1` |
-| API key | `simple-api-key` (or whatever you set as `LITELLM_MASTER_KEY`) |
-
----
-
-## Using with SparkRun
-
-[SparkRun](https://sparkrun.dev) is a CLI tool for launching and managing LLM inference workloads on NVIDIA DGX Spark systems. It eliminates the need for Slurm or Kubernetes — pick a recipe, run it, and SparkRun handles container orchestration, model distribution, and networking automatically. It supports vLLM, SGLang, llama.cpp, and eugr-vllm runtimes.
-
-Once a recipe is running, vLLM exposes an OpenAI-compatible API endpoint that LiteLLM connects to.
-
-```mermaid
-sequenceDiagram
-    participant App as App / Open WebUI
-    participant LM as LiteLLM :4000
-    participant vL as vLLM :8000/v1<br/>(launched by SparkRun)
-    participant GPU as DGX Spark GPU
-
-    App->>LM: POST /v1/messages<br/>model: claude-sonnet-4-5
-    LM->>LM: Map alias → local model<br/>Translate Anthropic → OpenAI format<br/>drop_params strips unsupported fields
-    LM->>vL: POST /v1/chat/completions<br/>model: Qwen/Qwen3-30B-A3B
-    vL->>GPU: Forward to loaded model
-    GPU-->>vL: Token stream
-    vL-->>LM: OpenAI response
-    LM-->>App: Anthropic response format
-```
-
-### Step 1 — Install SparkRun and launch a model
-
-```bash
-# Install SparkRun
-uvx sparkrun setup install
-
-# Launch a model recipe (vLLM exposes it on port 8000 by default)
-sparkrun run qwen3-30b-vllm
-
-# Or with a custom port
-sparkrun run qwen3-30b-vllm --port 9000
-
-# Check status
-sparkrun status
-```
-
-See [sparkrun.dev](https://sparkrun.dev) for the full recipe catalogue, multi-node `--tp` flag usage, and cluster configuration.
-
-### Step 2 — Find the model ID vLLM is serving
-
-```bash
-# Query the vLLM models endpoint directly
-curl http://localhost:8000/v1/models | python3 -m json.tool
-# Look for: "id": "Qwen/Qwen3-30B-A3B"
-```
-
-### Step 3 — Set the model ID in the config
-
-Update `litellm_claude_local.yaml` — replace `your-model-name` with the exact ID returned above:
-
-```yaml
-litellm_params:
-  model: openai/Qwen/Qwen3-30B-A3B
-  api_base: http://host.docker.internal:8000/v1
-  api_key: EMPTY
-```
-
-Then restart the proxy to pick up the change:
-
-```bash
-docker compose restart
-```
-
-### Step 4 — Register aliases dynamically (no restart needed)
-
-LiteLLM also supports live model registration via API — useful when SparkRun switches models without restarting the whole proxy:
-
-```bash
-curl -X POST http://localhost:4000/model/new \
-  -H "Authorization: Bearer simple-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model_name": "claude-sonnet-4-5",
-    "litellm_params": {
-      "model": "openai/Qwen/Qwen3-30B-A3B",
-      "api_base": "http://host.docker.internal:8000/v1",
-      "api_key": "EMPTY",
-      "temperature": 0.10,
-      "max_tokens": 16384,
-      "timeout": 300
-    }
-  }'
-```
-
-### Step 5 — Verify end-to-end
-
-```bash
+# End-to-end test
 curl http://localhost:4000/v1/messages \
   -H "Authorization: Bearer simple-api-key" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-sonnet-4-5",
-    "max_tokens": 64,
-    "messages": [{"role": "user", "content": "Reply with only: LOCAL MODEL WORKING"}]
+    "max_tokens": 32,
+    "messages": [{"role": "user", "content": "Reply: DGX SPARK WORKING"}]
   }'
 ```
+
+**Point your apps at the proxy**
+
+| Setting | Value |
+|---|---|
+| Base URL | `http://localhost:4000/v1` |
+| API key | `simple-api-key` |
 
 ---
 
 ## Auto-registration — sparkrun_sync.py
 
-The static `litellm_claude_local.yaml` config requires a proxy restart every time SparkRun loads a different model. The `auto-register/` directory contains a **dynamic sync daemon** that watches vLLM endpoints and registers/deregisters models in the LiteLLM database in real time — no restart, no manual config edits.
+When SparkRun swaps models on the DGX Spark, the static config goes stale. **`sparkrun_sync.py`** watches vLLM, detects model changes, and registers/deregisters presets and claude aliases in the LiteLLM database — no proxy restart needed.
 
 ```mermaid
-flowchart LR
-    subgraph SR["SparkRun"]
-        R["sparkrun run qwen3-30b-vllm"]
-        V["vLLM :8000/v1"]
-        R -->|loads model| V
-    end
+sequenceDiagram
+    participant U as You
+    participant SR as SparkRun CLI
+    participant vL as vLLM :8000
+    participant SY as sparkrun_sync.py
+    participant LM as LiteLLM :4000<br/>(DB mode)
+    participant App as App / Open WebUI
 
-    subgraph Sync["sparkrun_sync.py\n(runs on host)"]
-        P["Poll GET /v1/models\nevery 30s"]
-        L["Look up model\nin models.yaml"]
-        A["POST /model/new\nfor each preset"]
-        D["POST /model/delete\nwhen model goes away"]
-        P --> L --> A
-        P --> D
-    end
+    U->>SR: sparkrun run qwen3-30b-vllm
+    SR->>vL: Container + model loaded
+    SY->>vL: GET /v1/models (every 30s)
+    vL-->>SY: "Qwen/Qwen3-30B-A3B"
+    SY->>SY: Look up in models.yaml
+    SY->>LM: POST /model/new × 8<br/>(6 presets + claude-sonnet-4-5 + local-coder)
+    LM-->>App: Models now available
 
-    subgraph LM["LiteLLM :4000\n(DB mode)"]
-        DB[("PostgreSQL\ndynamic model store")]
-        API["Proxy API"]
-        DB <--> API
-    end
-
-    subgraph Apps["Apps"]
-        OW["Open WebUI"]
-        CC["Claude Code CLI"]
-    end
-
-    V -->|"model appears"| P
-    A -->|"register"| DB
-    D -->|"deregister"| DB
-    API --> Apps
+    U->>SR: sparkrun stop qwen3-30b-vllm
+    SR->>vL: Container stopped
+    SY->>vL: GET /v1/models
+    vL-->>SY: 404 / empty
+    SY->>LM: POST /model/delete × 8
+    LM-->>App: Models removed
 ```
-
-### Two modes
-
-| Mode | Config | Restart on model change? | When to use |
-|---|---|---|---|
-| **Static** | `litellm_claude_local.yaml` | Yes | Fixed model, simple setup |
-| **DB / dynamic** | `auto-register/docker-compose.db.yml` + `sparkrun_sync.py` | No | SparkRun swapping models, multi-GPU |
 
 ### Thinking style translation
 
-Different model families expose extended thinking via different API parameters. `sparkrun_sync.py` translates a single `thinking: N` value in `models.yaml` to the correct format per family:
+SparkRun runs different model families, each exposing extended thinking via a different vLLM parameter. `sparkrun_sync.py` reads `thinking_style` from `models.yaml` and translates a single `thinking: N` budget into the correct format automatically:
 
-| `thinking_style` | Models | What gets sent to vLLM |
+| `thinking_style` | Model families | What gets sent to vLLM |
 |---|---|---|
-| `thinking_budget` | Qwen3, Qwen3.5, MiniMax, DeepSeek-R1 | `thinking_budget: N` (top-level param) |
-| `nemotron` | NVIDIA Nemotron | `extra_body.chat_template_kwargs.enable_thinking: true, thinking_budget: N` |
-| `effort` | GPT-OSS | `extra_body.chat_template_kwargs.effort: "medium"\|"high"\|"max"` |
-| `none` | GLM, small Qwen, Llama | No thinking params added |
+| `thinking_budget` | Qwen3, Qwen3.5, MiniMax, DeepSeek-R1 | `thinking_budget: N` (top-level) |
+| `nemotron` | NVIDIA Nemotron-Nano, Nemotron-Super | `extra_body.chat_template_kwargs.enable_thinking: true, thinking_budget: N` |
+| `effort` | GPT-OSS | `extra_body.chat_template_kwargs.effort: "medium"|"high"|"max"` |
+| `none` | GLM, small Qwen, Llama | No thinking params |
 
 ### Setup
 
-**1. Start LiteLLM with database**
+**1. Start LiteLLM with Postgres (DB mode)**
 
 ```bash
 docker compose -f auto-register/docker-compose.db.yml up -d
 ```
 
-This starts a Postgres container alongside LiteLLM. The `STORE_MODEL_IN_DB=true` environment variable enables the `/model/new` and `/model/delete` API endpoints that the sync script uses.
+**2. Configure models**
 
-**2. Configure your models**
-
-Edit `auto-register/models.yaml`. The most important fields per model entry:
+Edit `auto-register/models.yaml`. Add an entry for each model SparkRun may load:
 
 ```yaml
-"Qwen/Qwen3-30B-A3B":          # exact string from GET /v1/models
-  short_name: "Qwen3-30B"       # prefix for preset names: Qwen3-30B-Fast, etc.
+"Qwen/Qwen3-30B-A3B":
+  short_name: "Qwen3-30B"            # prefix: Qwen3-30B-Fast, Qwen3-30B-Code, etc.
   thinking_style: "thinking_budget"
-  claude_code_alias: "claude-sonnet-4-5"   # optional — registers this alias too
+  claude_code_alias: "claude-sonnet-4-5"   # also registers this alias
 ```
 
-**3. Run the sync daemon**
+Find the exact model name with:
 
 ```bash
-# Install dependencies
-pip install requests pyyaml
-
-# Single pass (useful for testing)
-python auto-register/sparkrun_sync.py --once
-
-# Watch mode — polls every 30 seconds
-python auto-register/sparkrun_sync.py --watch
-
-# Custom interval
-python auto-register/sparkrun_sync.py --watch --interval 15
+curl http://localhost:8000/v1/models | python3 -m json.tool
 ```
 
-**4. Load a model with SparkRun**
+**3. Install and run the sync daemon**
+
+```bash
+pip install requests pyyaml
+
+# Test: single pass
+python auto-register/sparkrun_sync.py --once
+
+# Production: continuous watch
+python auto-register/sparkrun_sync.py --watch
+```
+
+**4. Load a model — presets appear automatically**
 
 ```bash
 sparkrun run qwen3-30b-vllm
 ```
 
-Within one poll cycle the sync script detects the model on port 8000, looks it up in `models.yaml`, and registers all presets. You'll see output like:
-
 ```
 10:42:01 [INFO] Port 8000: detected Qwen/Qwen3-30B-A3B
 10:42:01 [INFO]   Config match: Qwen3-30B
-10:42:01 [INFO]   + Qwen3-30B-Fast                    id: 3a7f1c...
-10:42:01 [INFO]   + Qwen3-30B-Expert                  id: 9b2e4d...
-10:42:01 [INFO]   + Qwen3-30B-Heavy                   id: 5c8a0f...
-10:42:01 [INFO]   + Qwen3-30B-Max                     id: 1d6b3e...
-10:42:01 [INFO]   + Qwen3-30B-Code                    id: 7f4c2a...
-10:42:01 [INFO]   + Qwen3-30B-Creative                id: 2e9d5b...
-10:42:01 [INFO]   + claude-sonnet-4-5                 id: 8a1f7c...
-10:42:01 [INFO]   + local-coder                       id: 4b6e3d...
+10:42:01 [INFO]   + Qwen3-30B-Fast          id: 3a7f1c...
+10:42:01 [INFO]   + Qwen3-30B-Expert        id: 9b2e4d...
+10:42:01 [INFO]   + Qwen3-30B-Heavy         id: 5c8a0f...
+10:42:01 [INFO]   + Qwen3-30B-Max           id: 1d6b3e...
+10:42:01 [INFO]   + Qwen3-30B-Code          id: 7f4c2a...
+10:42:01 [INFO]   + Qwen3-30B-Creative      id: 2e9d5b...
+10:42:01 [INFO]   + claude-sonnet-4-5       id: 8a1f7c...
+10:42:01 [INFO]   + local-coder             id: 4b6e3d...
 ```
 
-**5. Switch models — zero downtime**
+**5. Swap models — zero downtime**
 
 ```bash
 sparkrun stop qwen3-30b-vllm
 sparkrun run qwen3-coder-next-vllm
+# sync detects the change, deregisters old presets, registers new ones
 ```
-
-The sync script detects the change, deregisters all Qwen3-30B presets, and registers the new Qwen3-Coder presets — all within the next poll cycle.
 
 ### CLI reference
 
 ```bash
-python sparkrun_sync.py --once               # single pass
-python sparkrun_sync.py --watch              # continuous (default 30s)
-python sparkrun_sync.py --watch --interval 15
-python sparkrun_sync.py --deregister-all     # clean slate — remove everything
-python sparkrun_sync.py --once --port 8001   # target one endpoint only
+python sparkrun_sync.py --once                   # single pass then exit
+python sparkrun_sync.py --watch                  # continuous (default 30s)
+python sparkrun_sync.py --watch --interval 15    # custom poll interval
+python sparkrun_sync.py --deregister-all         # remove all dynamic models
+python sparkrun_sync.py --once --port 8001       # target one endpoint
 python sparkrun_sync.py --litellm-url http://192.168.1.10:4000
-python sparkrun_sync.py -v                   # verbose / debug logging
+python sparkrun_sync.py -v                       # verbose / debug logging
 ```
 
 ### Run as a systemd service
-
-To keep the sync running across reboots, install it as a user service:
 
 ```ini
 # ~/.config/systemd/user/sparkrun-sync.service
@@ -359,7 +268,7 @@ Description=SparkRun → LiteLLM model sync
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /path/to/claude-local-stack/auto-register/sparkrun_sync.py --watch --interval 30
+ExecStart=/usr/bin/python3 /path/to/sparkrun-litellm-local/auto-register/sparkrun_sync.py --watch --interval 30
 Restart=on-failure
 RestartSec=10
 
@@ -374,161 +283,95 @@ journalctl --user -fu sparkrun-sync
 
 ---
 
-## Configuration
-
-### Changing the master key
-
-Replace `simple-api-key` in `docker-compose.yml`:
-
-```yaml
-environment:
-  LITELLM_MASTER_KEY: "my-secret-key"
-```
-
-Use the same value in every app that connects.
-
-### Pointing at a different local server
-
-Every model entry in `litellm_claude_local.yaml` has two fields to change:
-
-```yaml
-litellm_params:
-  model: openai/<model-id-your-server-uses>
-  api_base: http://host.docker.internal:<port>/v1
-  api_key: <your-server-key-or-EMPTY>
-```
-
-`host.docker.internal` resolves to the host machine from inside Docker on both macOS and Linux (the compose file adds the required `extra_hosts` entry for Linux automatically).
-
-### Running on a remote server
-
-Change `api_base` to the full network address of your inference server:
-
-```yaml
-api_base: http://192.168.1.50:8000/v1
-```
-
-### Adding models that aren't aliased
-
-Add any new entry directly to `model_list` in `litellm_claude_local.yaml`. No restart needed if you use the [LiteLLM UI](https://docs.litellm.ai/docs/proxy/ui) or the `/model/new` API to add them at runtime.
-
----
-
 ## Model routing & temperature guide
 
-The config maps three tiers of Claude model name to the same local model with different temperature and timeout settings. Adjust these to match your model's strengths.
+Both modes map three tiers of Claude model name to the active vLLM model with tuned settings per tier:
 
-| Alias group | Model names | Temp | Max tokens | Use for |
+| Alias tier | Claude model names | Temp | Max tokens | Use for |
 |---|---|---|---|---|
-| **Opus** | `claude-opus-4-5`, `claude-opus-4-0`, `claude-3-7-sonnet-20250219`, `claude-3-opus-20240229` | 0.55 | 32 768 | Deep reasoning, long-horizon planning, complex analysis |
-| **Sonnet** | `claude-sonnet-4-5`, `claude-sonnet-4-0`, `claude-3-5-sonnet-20241022`, `claude-3-5-sonnet-20240620` | **0.10** | 16 384 | Code generation — low temperature gives deterministic, reproducible output |
-| **Haiku** | `claude-haiku-3-5`, `claude-3-5-haiku-20241022`, `claude-3-haiku-20240307` | 0.55 | 16 384 | Fast summarisation, classification, cheap sub-tasks |
+| **Opus** | `claude-opus-4-5`, `claude-opus-4-0`, `claude-3-7-sonnet-20250219`, `claude-3-opus-20240229` | 0.55 | 32 768 | Deep reasoning, long-horizon tasks, complex analysis |
+| **Sonnet** | `claude-sonnet-4-5`, `claude-sonnet-4-0`, `claude-3-5-sonnet-20241022`, `claude-3-5-sonnet-20240620` | **0.10** | 16 384 | Code generation — low temp = deterministic, reproducible output |
+| **Haiku** | `claude-haiku-3-5`, `claude-3-5-haiku-20241022`, `claude-3-haiku-20240307` | 0.55 | 16 384 | Fast responses, summarisation, cheap sub-tasks |
 
-**Why different temperatures for the same underlying model?**
-
-Applications choose the model tier that matches the task. Sonnet is most commonly used for coding tasks, where low temperature is critical — it eliminates hallucinated function names, inconsistent variable usage, and non-reproducible outputs. Opus is chosen for reasoning tasks where creative exploration is more valuable than strict determinism.
+Low temperature on Sonnet is deliberate — it eliminates hallucinated function names, inconsistent variable usage, and non-reproducible outputs when used for coding tasks.
 
 ---
 
 ## ⚠️ The Claude Code CLI conflict
 
-This section is important if you use [Claude Code](https://code.claude.com) (the terminal coding assistant) **as a CLI tool on the same machine**.
+This matters if you run [Claude Code](https://code.claude.com) as a **CLI tool on the DGX Spark itself**.
 
-### What causes the conflict
+### What causes it
 
-Claude Code CLI respects two environment variables:
+Claude Code CLI reads two environment variables at startup:
 
 ```bash
-ANTHROPIC_BASE_URL   # where to send API requests
-ANTHROPIC_AUTH_TOKEN # API key to use
+ANTHROPIC_BASE_URL   # where to send requests
+ANTHROPIC_AUTH_TOKEN # API key
 ```
 
-If these are set in your shell — and LiteLLM has `claude-*` model aliases registered — **every Claude Code request silently routes to your local model instead of Anthropic's API**. You get your local model answering as if it were Claude Sonnet. The CLI gives no warning.
+If these point at the LiteLLM proxy — and LiteLLM has `claude-*` aliases registered — every Claude Code request silently routes to your local vLLM model instead of Anthropic's API. No warning is shown.
 
-See the official Anthropic documentation: [LLM Gateway — Claude Code](https://code.claude.com/docs/en/llm-gateway).
+See the official Anthropic docs: [LLM Gateway — Claude Code](https://code.claude.com/docs/en/llm-gateway).
 
 ### Who is affected
 
-| Surface | Affected? | Why |
+| Surface | Affected? | Reason |
 |---|---|---|
 | **Claude Code CLI** (`claude` in terminal) | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | CLI reads env vars at startup |
-| **Claude Desktop app** | ❌ No | Connects directly to `api.anthropic.com`, ignores shell env vars |
-| **Claude web app** | ❌ No | Browser-based, no access to shell env |
-| **Open WebUI** | ❌ No | Connects to LiteLLM via its own settings, not shell env |
-| **Your own code using Anthropic SDK** | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | SDK reads env vars |
+| **Claude Desktop app** | ❌ No | Connects directly to `api.anthropic.com` — ignores shell env |
+| **Claude web app** | ❌ No | Browser-based, no shell env access |
+| **Open WebUI** | ❌ No | Uses its own connection settings, not shell env |
+| **Your own code (Anthropic SDK)** | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | SDK reads env vars |
 
-### The safe patterns
+### Safe patterns
 
-**Pattern 1 — Don't set `ANTHROPIC_BASE_URL` globally (recommended)**
-
-Keep your shell clean. Only set the env vars when you deliberately want local routing:
+**One-off local session**
 
 ```bash
-# One-off local session
 ANTHROPIC_BASE_URL=http://localhost:4000 \
 ANTHROPIC_AUTH_TOKEN=simple-api-key \
 claude
-
-# Back to Anthropic cloud — just open a new terminal or:
-unset ANTHROPIC_BASE_URL
+# New terminal = back to Anthropic cloud
 ```
 
-**Pattern 2 — Named alias for intentional local use**
+**Named alias (add to `~/.bashrc`)**
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc
 alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=simple-api-key claude'
 ```
 
 ```bash
-claude          # → Anthropic cloud (real Claude)
-claude-local    # → local model via LiteLLM (explicit, intentional)
+claude          # → Anthropic cloud
+claude-local    # → DGX Spark vLLM via LiteLLM
 ```
-
-**Pattern 3 — Separate port for Claude Code CLI**
-
-Run a second LiteLLM instance on a different port (e.g. 4003) and only ever point `ANTHROPIC_BASE_URL` at that one. The main port 4000 stays clean for Open WebUI and other tools.
-
-### What happens if you do route Claude Code CLI locally
-
-The CLI will work but with reduced capability. Local models (even strong ones) differ from Claude in:
-
-- **Tool use reliability** — function calling schemas may not be followed as strictly
-- **Context window** — most local models are 32K–128K vs Claude's 200K
-- **Extended thinking** — Claude's `thinking` parameter is stripped by `drop_params: true`
-- **Instruction following** — system prompt fidelity varies by model
-
-For agentic coding tasks with file edits, bash commands, and multi-step plans, Claude Sonnet/Opus outperforms current open-weight models. Local routing is best suited for quick questions, summarisation, and experimentation.
 
 ---
 
 ## Using with Open WebUI
 
-1. Start this stack: `docker compose up -d`
+1. Start the proxy: `docker compose up -d`
 2. Open WebUI → **Admin → Settings → Connections → Add Connection**
-3. Fill in:
-   - **Name:** Local Models
-   - **URL:** `http://localhost:4000/v1`
-   - **Key:** `simple-api-key`
-4. Save — all `claude-*` model names appear in the model selector immediately.
+3. Set **URL** to `http://localhost:4000/v1` and **Key** to `simple-api-key`
+4. All `claude-*` model names appear in the model selector immediately
 
-If Open WebUI is running in Docker on the same `llm-net` network, use `http://litellm-claude-local:4000/v1` instead of `localhost`.
+If Open WebUI runs in Docker on the same network, use the container name instead of `localhost`.
 
 ---
 
 ## Using with Langflow
 
-In any Langflow component that has an OpenAI-compatible endpoint field:
+In any Langflow component with an OpenAI-compatible endpoint:
 
 - **Base URL:** `http://localhost:4000/v1`
 - **API Key:** `simple-api-key`
-- **Model:** `claude-sonnet-4-5` (or any alias)
+- **Model:** `claude-sonnet-4-5`
 
 ---
 
 ## Using with your own code
 
-**Python (Anthropic SDK)**
+**Anthropic SDK**
 
 ```python
 import anthropic
@@ -537,38 +380,30 @@ client = anthropic.Anthropic(
     base_url="http://localhost:4000",
     api_key="simple-api-key",
 )
-
-message = client.messages.create(
-    model="claude-sonnet-4-5",   # routed to your local model
+msg = client.messages.create(
+    model="claude-sonnet-4-5",   # → DGX Spark vLLM
     max_tokens=1024,
-    messages=[{"role": "user", "content": "Explain transformers in one paragraph."}],
+    messages=[{"role": "user", "content": "Hello from DGX Spark"}],
 )
-print(message.content[0].text)
+print(msg.content[0].text)
 ```
 
-**Python (OpenAI SDK — also works)**
+**OpenAI SDK**
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(
-    base_url="http://localhost:4000/v1",
-    api_key="simple-api-key",
-)
-
-response = client.chat.completions.create(
+client = OpenAI(base_url="http://localhost:4000/v1", api_key="simple-api-key")
+resp = client.chat.completions.create(
     model="claude-sonnet-4-5",
-    messages=[{"role": "user", "content": "Write a binary search in Python."}],
+    messages=[{"role": "user", "content": "Hello from DGX Spark"}],
 )
-print(response.choices[0].message.content)
+print(resp.choices[0].message.content)
 ```
 
-**Environment variables (any SDK)**
+**Environment variables**
 
 ```bash
-export OPENAI_API_BASE="http://localhost:4000/v1"
-export OPENAI_API_KEY="simple-api-key"
-# or for Anthropic SDK:
 export ANTHROPIC_BASE_URL="http://localhost:4000"
 export ANTHROPIC_AUTH_TOKEN="simple-api-key"
 ```
@@ -590,14 +425,11 @@ export ANTHROPIC_AUTH_TOKEN="simple-api-key"
 | Resource | Link |
 |---|---|
 | GitHub | https://github.com/BerriAI/litellm |
-| Docs home | https://docs.litellm.ai |
+| Docs | https://docs.litellm.ai |
 | Proxy quickstart | https://docs.litellm.ai/docs/proxy/quick_start |
-| Supported providers | https://docs.litellm.ai/docs/providers |
 | Claude Code tutorial | https://docs.litellm.ai/docs/tutorials/claude_non_anthropic_models |
-| MCP tutorial | https://docs.litellm.ai/docs/tutorials/claude_mcp |
 | Config reference | https://docs.litellm.ai/docs/proxy/configs |
 | drop_params | https://docs.litellm.ai/docs/completion/drop_params |
-| Routing | https://docs.litellm.ai/docs/routing |
 | Docker image | `ghcr.io/berriai/litellm:main-latest` |
 
 ### SparkRun

@@ -80,6 +80,8 @@ flowchart TD
 
 ## Status dashboard
 
+**http://localhost:8900/status.html**
+
 ![Claude Code Status Dashboard](assets/Status%20Dashboard%20Claude%20Code.png)
 
 `status.html` is a zero-dependency browser dashboard that gives you a live view of the full stack — no Python server, no extra dependencies, no installation. Open it any time to check whether SparkRun has a model loaded, whether LiteLLM has registered it, and to grab the exact shell commands needed to connect Claude Code to it.
@@ -88,8 +90,6 @@ flowchart TD
 # Serve locally — required so fetch() can reach localhost:4000 and localhost:8000
 python3 -m http.server 8900 --directory .
 ```
-
-Then open **http://localhost:8900/status.html** in your browser.
 
 ### What it shows
 

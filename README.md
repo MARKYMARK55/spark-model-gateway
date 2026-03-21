@@ -14,6 +14,7 @@ SparkRun launches a model onto the DGX Spark GPU. vLLM serves it on an OpenAI-co
 - [Auto-registration — sparkrun_sync.py](#auto-registration--sparkrun_syncpy)
 - [Model routing & temperature guide](#model-routing--temperature-guide)
 - [⚠️ The Claude Code CLI conflict](#️-the-claude-code-cli-conflict)
+- [LiteLLM UI](#litellm-ui)
 - [Using with Open WebUI](#using-with-open-webui)
 - [Using with Langflow](#using-with-langflow)
 - [Using with your own code](#using-with-your-own-code)
@@ -417,6 +418,41 @@ alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKE
 claude          # → Anthropic cloud
 claude-local    # → DGX Spark vLLM via LiteLLM
 ```
+
+---
+
+## LiteLLM UI
+
+LiteLLM ships with a built-in web dashboard. Open it at:
+
+```
+http://localhost:4000/ui
+```
+
+Login with:
+
+| Field | Value |
+|---|---|
+| Username | `admin` |
+| Password | `simple-api-key` (the `LITELLM_MASTER_KEY`) |
+
+### What you can do in the UI
+
+| Tab | What it shows |
+|---|---|
+| **Models** | All registered models — name, provider, litellm_params. In DB mode you can see dynamically registered presets appear/disappear here as sparkrun_sync.py runs |
+| **Logs / Usage** | Per-request logs: model called, tokens in/out, latency, status code |
+| **Spend** | Token usage and cost tracking per key / model (useful for estimating relative load) |
+| **Keys** | Manage API keys — create scoped keys per user or application |
+| **Test** | Send a test completion request directly from the browser |
+
+### Useful for debugging
+
+- **Models not appearing?** Check the Models tab — if a preset is missing after `sparkrun run`, either the sync hasn't polled yet (wait 30s) or the model name didn't match `models.yaml`
+- **Requests failing?** Logs tab shows the exact error from vLLM — `drop_params` errors, connection refused, timeout, etc.
+- **Wrong model being called?** Logs tab shows which underlying model name was actually used for each request
+
+> The UI requires DB mode (`docker-compose.db.yml`) for full functionality. In static mode (no Postgres) the Models tab and Spend tracking are limited.
 
 ---
 

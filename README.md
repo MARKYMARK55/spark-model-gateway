@@ -285,22 +285,17 @@ journalctl --user -fu sparkrun-sync
 
 ## Recommended models for DGX Spark
 
-The NVIDIA DGX Spark has a **GB200 NVL2** — two Blackwell GPUs with **384 GB of unified memory** shared across both dies. This rules out nothing in the open-weight space and allows multi-node tensor parallelism via SparkRun's `--tp` flag when running a cluster.
+The NVIDIA DGX Spark has a **GB10 Grace Blackwell Superchip** — **1 GPU, 128 GB of LPDDR5x unified memory** at 273 GB/s. All memory is coherent between CPU and GPU, so the full 128 GB is available for model weights.
 
 ```mermaid
 graph LR
-    subgraph DGX["DGX Spark — GB200 NVL2 (384 GB)"]
-        subgraph TP1["TP1 — single GPU"]
-            M1["Qwen3-30B-A3B ⭐ best all-round"]
-            M2["Qwen3.5-35B-A3B ⭐ best coding"]
-            M3["Qwen3.5-27B-FP8"]
-            M4["Nemotron-Nano-30B (eugr)"]
-        end
-        subgraph TP2["TP2 — both GPUs"]
-            M5["Qwen3.5-122B-A10B ⭐ best reasoning"]
-            M6["Nemotron-Super-120B (eugr)"]
-            M7["GPT-OSS-120B (eugr)"]
-        end
+    subgraph DGX["DGX Spark — GB10 (128 GB unified)"]
+        M1["Qwen3-30B-A3B ⭐ best all-round\n~30 GB BF16 / ~15 GB FP8"]
+        M2["Qwen3.5-35B-A3B ⭐ best coding\n~35 GB BF16 / ~18 GB FP8"]
+        M3["Qwen3-Coder-Next ⭐ agentic code\n~30 GB FP8"]
+        M4["Nemotron-Nano-30B\n~30 GB BF16 (eugr runtime)"]
+        M5["Qwen3.5-122B-A10B-FP8\n~122 GB FP8 — uses most of VRAM"]
+        M6["Llama-3.3-70B FP8\n~70 GB FP8"]
     end
 ```
 
@@ -310,18 +305,19 @@ graph LR
 |---|---|---|---|---|
 | **Qwen3.5-35B-A3B** | `qwen35-35b-vllm` | `thinking_budget` | Coding, instruction following | `claude-sonnet-4-5` |
 | **Qwen3-30B-A3B** | `qwen3-30b-vllm` | `thinking_budget` | All-round, fast thinking | `claude-sonnet-4-5` |
-| **Qwen3.5-122B-A10B** | `qwen35-122b-vllm --tp 2` | `thinking_budget` | Complex reasoning, long context | `claude-opus-4-5` |
-| **Nemotron-Nano-30B** | `nemotron-nano-vllm` | `nemotron` | Synthesis presets, DGX-optimised | `claude-sonnet-4-5` |
-| **Nemotron-Super-120B** | `nemotron-super-vllm --tp 2` | `nemotron` | Flagship NVIDIA model | `claude-opus-4-5` |
 | **Qwen3-Coder-Next** | `qwen3-coder-vllm` | `thinking_budget` | Pure code generation, agentic tasks | `claude-sonnet-4-5` |
+| **Nemotron-Nano-30B** | `nemotron-nano-vllm` | `nemotron` | DGX-optimised, synthesis tasks | `claude-sonnet-4-5` |
+| **Qwen3.5-122B-A10B-FP8** | `qwen35-122b-vllm` | `thinking_budget` | Complex reasoning, long context | `claude-opus-4-5` |
+| **Llama-3.3-70B-Instruct** | `llama33-70b-vllm` | `none` | Fast, no thinking overhead | `claude-sonnet-4-5` |
 
 ### Notes
 
-- **TP1 models** (30B–35B MoE) load on a single GPU partition — faster cold-start, lower VRAM pressure
-- **TP2 models** (120B+) use both GPUs via tensor parallelism — higher quality, ~2× slower start
-- **MoE architecture** (Qwen3-30B-A3B is 30B params / 3B active) gives 70B-class quality at 30B inference cost
-- **eugr runtime** (NVIDIA-optimised vLLM fork) squeezes 10–20% more throughput on Blackwell for Nemotron models — specify in the SparkRun recipe if available
-- FP8 variants (suffix `-FP8`) are preferred on Blackwell — native hardware support, minimal quality loss
+- **128 GB unified memory** means the GB10 shares one pool between CPU and GPU — no separate VRAM budget to worry about
+- **MoE models** (Qwen3-30B-A3B: 30B params / 3B active) give 70B-class quality at 30B inference cost and load very fast
+- **FP8 variants** (suffix `-FP8`) are strongly preferred on Blackwell — native hardware support, ~half the memory footprint, minimal quality loss
+- **Qwen3.5-122B-A10B-FP8** at ~122 GB is close to the 128 GB limit — leaves little headroom; load nothing else alongside it
+- **Dense 70B BF16** (~140 GB) does **not** fit — use FP8 quantised variant (~70 GB) instead
+- **eugr runtime** (NVIDIA-optimised vLLM fork) gives 10–20% more throughput on Blackwell for Nemotron models — specify in the SparkRun recipe if available
 - All models above have entries in `auto-register/models.yaml` with the correct thinking style pre-configured
 
 ### Swap models on the fly

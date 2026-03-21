@@ -116,7 +116,14 @@ litellm_params:
 docker compose up -d
 ```
 
-**6. Verify**
+**6. Check container status**
+
+```bash
+docker ps --filter name=litellm
+docker logs litellm-claude-local -f
+```
+
+**7. Verify**
 
 ```bash
 # Check aliases are registered
@@ -189,6 +196,19 @@ SparkRun runs different model families, each exposing extended thinking via a di
 
 ```bash
 docker compose -f auto-register/docker-compose.db.yml up -d
+```
+
+Container names in DB mode:
+
+| Container | Purpose |
+|---|---|
+| `litellm-claude-local` | LiteLLM proxy on port 4000 |
+| `litellm-db` | PostgreSQL model store |
+
+```bash
+docker ps --filter name=litellm
+docker logs litellm-claude-local -f
+docker logs litellm-db -f
 ```
 
 **2. Configure models**

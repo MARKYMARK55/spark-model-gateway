@@ -469,7 +469,7 @@ Claude Code CLI reads two environment variables at startup:
 
 ```bash
 ANTHROPIC_BASE_URL   # where to send requests
-ANTHROPIC_AUTH_TOKEN # API key
+ANTHROPIC_API_KEY # API key
 ```
 
 If these are **not set** (or point at `api.anthropic.com`), Claude Code falls back to the cached Anthropic login in `~/.claude/.credentials.json`. When that token expires, you get the 401 error above.
@@ -497,7 +497,7 @@ Add to your `~/.bashrc` or `~/.zshrc`:
 ```bash
 # Local Claude Code via LiteLLM proxy (bypasses Anthropic cloud OAuth)
 export ANTHROPIC_BASE_URL=http://localhost:4000
-export ANTHROPIC_AUTH_TOKEN=simple-api-key
+export ANTHROPIC_API_KEY=simple-api-key
 ```
 
 Then reload: `source ~/.bashrc`
@@ -507,7 +507,7 @@ Now plain `claude` always uses your local models. No OAuth, no token expiry, no 
 **Option 2: Named alias (if you switch between local and cloud)**
 
 ```bash
-alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=simple-api-key claude'
+alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_API_KEY=simple-api-key claude'
 ```
 
 ```bash
@@ -519,7 +519,7 @@ claude-local    # → DGX Spark vLLM via LiteLLM
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:4000 \
-ANTHROPIC_AUTH_TOKEN=simple-api-key \
+ANTHROPIC_API_KEY=simple-api-key \
 claude
 # New terminal = back to Anthropic cloud
 ```
@@ -644,7 +644,7 @@ print(resp.choices[0].message.content)
 
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:4000"
-export ANTHROPIC_AUTH_TOKEN="simple-api-key"
+export ANTHROPIC_API_KEY="simple-api-key"
 ```
 
 ---

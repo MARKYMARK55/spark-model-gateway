@@ -448,6 +448,21 @@ Low temperature on Sonnet is deliberate — it eliminates hallucinated function 
 
 This matters if you run [Claude Code](https://code.claude.com) as a **CLI tool on the DGX Spark itself**.
 
+### The OAuth 401 error
+
+If you launch `claude` without the local env vars set, you'll hit this error:
+
+```
+Please run /login · API Error: 401
+{"type":"error","error":{"type":"authentication_error",
+"message":"OAuth token has expired. Please obtain a new token
+or refresh your existing token."}}
+```
+
+![Claude Code OAuth 401 Error](assets/claude-code-oauth-401-error.png)
+
+This happens because Claude Code is still pointing at **Anthropic's cloud API** (`api.anthropic.com`) and your cached OAuth token has expired. Your local LiteLLM + SparkRun stack doesn't use OAuth at all — it uses a simple API key. The fix is telling Claude Code to use your local proxy instead.
+
 ### What causes it
 
 Claude Code CLI reads two environment variables at startup:
@@ -457,7 +472,9 @@ ANTHROPIC_BASE_URL   # where to send requests
 ANTHROPIC_AUTH_TOKEN # API key
 ```
 
-If these point at the LiteLLM proxy — and LiteLLM has `claude-*` aliases registered — every Claude Code request silently routes to your local vLLM model instead of Anthropic's API. No warning is shown.
+If these are **not set** (or point at `api.anthropic.com`), Claude Code falls back to the cached Anthropic login in `~/.claude/.credentials.json`. When that token expires, you get the 401 error above.
+
+If these **do** point at the LiteLLM proxy — and LiteLLM has `claude-*` aliases registered — every Claude Code request routes to your local vLLM model instead of Anthropic's API. No OAuth, no token expiry, no rate limits.
 
 See the official Anthropic docs: [LLM Gateway — Claude Code](https://code.claude.com/docs/en/llm-gateway).
 
@@ -465,24 +482,29 @@ See the official Anthropic docs: [LLM Gateway — Claude Code](https://code.clau
 
 | Surface | Affected? | Reason |
 |---|---|---|
-| **Claude Code CLI** (`claude` in terminal) | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | CLI reads env vars at startup |
+| **Claude Code CLI** (`claude` in terminal) | ✅ Yes — if `ANTHROPIC_BASE_URL` is not set or points at cloud | CLI reads env vars at startup |
 | **Claude Desktop app** | ❌ No | Connects directly to `api.anthropic.com` — ignores shell env |
 | **Claude web app** | ❌ No | Browser-based, no shell env access |
 | **Open WebUI** | ❌ No | Uses its own connection settings, not shell env |
-| **Your own code (Anthropic SDK)** | ✅ Yes — if `ANTHROPIC_BASE_URL` is set | SDK reads env vars |
+| **Your own code (Anthropic SDK)** | ✅ Yes — if `ANTHROPIC_BASE_URL` is not set | SDK reads env vars |
 
-### Safe patterns
+### The fix
 
-**One-off local session**
+**Option 1: Permanent (recommended)**
+
+Add to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:4000 \
-ANTHROPIC_AUTH_TOKEN=simple-api-key \
-claude
-# New terminal = back to Anthropic cloud
+# Local Claude Code via LiteLLM proxy (bypasses Anthropic cloud OAuth)
+export ANTHROPIC_BASE_URL=http://localhost:4000
+export ANTHROPIC_AUTH_TOKEN=simple-api-key
 ```
 
-**Named alias (add to `~/.bashrc`)**
+Then reload: `source ~/.bashrc`
+
+Now plain `claude` always uses your local models. No OAuth, no token expiry, no rate limits.
+
+**Option 2: Named alias (if you switch between local and cloud)**
 
 ```bash
 alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=simple-api-key claude'
@@ -492,6 +514,32 @@ alias claude-local='ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKE
 claude          # → Anthropic cloud
 claude-local    # → DGX Spark vLLM via LiteLLM
 ```
+
+**Option 3: One-off session**
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:4000 \
+ANTHROPIC_AUTH_TOKEN=simple-api-key \
+claude
+# New terminal = back to Anthropic cloud
+```
+
+### Verify it works
+
+```bash
+source ~/.bashrc
+claude --version   # should not 401
+claude             # should connect to your local model
+```
+
+### Common issues
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Still getting 401 | Env vars not loaded | Run `source ~/.bashrc` or open a new terminal |
+| `Connection refused` on port 4000 | LiteLLM not running | `docker compose up -d` |
+| Response but wrong model | Sync daemon not running | Start `sparkrun_sync.py --watch` |
+| Works in terminal but not in DGX Spark HUB | Dashboard container needs the vars | Restart the container after setting env vars |
 
 ![Claude Code session routed to local DGX Spark model](assets/Claude%20Code.png)
 
